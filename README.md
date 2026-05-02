@@ -1,6 +1,14 @@
+<p align="center">
+  <img src="docs/assets/pamie_logo.png" alt="Pamie logo" width="560">
+</p>
+
 # Pamie
 
 Self-hosted long-term memory for MCP agents.
+
+Website: <https://pamie.io>
+
+Docker Hub: <https://hub.docker.com/repository/docker/kurocho/pamie/general>
 
 Pamie is a self-hosted, local-first, provider-independent long-term memory server for MCP agents. It runs as a single Go binary exposing an MCP HTTP endpoint protected by Bearer token authentication, with SQLite and FTS5 as durable local storage. Its memory lifecycle is inspired by Elasticsearch ILM and human memory: fresh memories are fast and prominent, old memories remain available, important memories stay easy to retrieve, and access patterns can promote useful memories back into higher tiers.
 
@@ -162,6 +170,8 @@ pamie embeddings backfill --db-path data/pamie.db --provider ollama --model embe
 Vector search is off by default. Keep it disabled with the default settings, or pass `--vector-search=false` to override an environment setting. The `ollama` provider expects a local Ollama server. Use `local-hash` for dependency-free deterministic test embeddings.
 
 ## Docker
+
+Published images live at <https://hub.docker.com/repository/docker/kurocho/pamie/general>.
 
 Build the image:
 

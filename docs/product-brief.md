@@ -2,6 +2,10 @@
 
 Pamie is a local long-term memory server for MCP agents. It gives agents a durable place to store, retrieve, and manage context across sessions without depending on a hosted AI provider or managed search service.
 
+Website: <https://pamie.io>
+
+Docker Hub: <https://hub.docker.com/repository/docker/kurocho/pamie/general>
+
 ## Target Users
 
 - Individual developers running local agents.

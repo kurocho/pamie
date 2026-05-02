@@ -2,6 +2,10 @@
 
 Pamie should run as a small service with a persistent data directory and an HTTPS reverse proxy when exposed outside localhost.
 
+Project website: <https://pamie.io>
+
+Docker Hub repository: <https://hub.docker.com/repository/docker/kurocho/pamie/general>
+
 ## Local Development
 
 Current development server:
@@ -85,7 +89,7 @@ docker compose up --build
 For public HTTPS exposure, enable the Caddy profile and set a real hostname:
 
 ```sh
-export PAMIE_HOSTNAME=pamie.example.com
+export PAMIE_HOSTNAME=pamie.io
 docker compose --profile https up -d --build
 ```
 
@@ -177,7 +181,9 @@ make checksums
 
 Tagged GitHub releases use `.github/workflows/release.yml`. The workflow builds Linux and macOS binaries for `amd64` and `arm64`, writes `checksums.txt`, publishes release artifacts to GitHub, and publishes multi-architecture Docker images to Docker Hub.
 
-Published Docker Hub tags:
+Published Docker Hub repository: <https://hub.docker.com/repository/docker/kurocho/pamie/general>.
+
+Published tags:
 
 - `kurocho/pamie:<git tag>`, for example `kurocho/pamie:v0.1.0`.
 - `kurocho/pamie:latest`.
