@@ -72,13 +72,27 @@ Pamie Go binary
 
 ## Install
 
-Build and install the local `pamie` command:
+Install Pamie with Homebrew:
+
+```sh
+brew install kurocho/tap/pamie
+pamie --version
+```
+
+Or tap the repository first:
+
+```sh
+brew tap kurocho/tap
+brew install pamie
+```
+
+Build and install from source for local development:
 
 ```sh
 ./scripts/install-local.sh
 ```
 
-The script builds `./cmd/pamie`, installs it to `~/.local/bin/pamie` by default, and adds that directory to your shell profile if it is missing from `PATH`.
+The source install script builds `./cmd/pamie`, installs it to `~/.local/bin/pamie` by default, and adds that directory to your shell profile if it is missing from `PATH`.
 
 Reload your shell after installation:
 
@@ -173,16 +187,30 @@ Vector search is off by default. Keep it disabled with the default settings, or 
 
 Published images live at <https://hub.docker.com/repository/docker/kurocho/pamie/general>.
 
+Run the latest published image with a persistent Docker volume:
+
+```sh
+docker volume create pamie-data
+export PAMIE_TOKEN="$(openssl rand -hex 32)"
+docker run --rm \
+  --name pamie \
+  -p 127.0.0.1:8080:8080 \
+  -v pamie-data:/data \
+  -e PAMIE_TOKEN="$PAMIE_TOKEN" \
+  -e PAMIE_TOKEN_ID=local \
+  -e PAMIE_TOKEN_SCOPES=all \
+  kurocho/pamie:latest
+```
+
 Build the image:
 
 ```sh
 docker build --build-arg VERSION=dev -t pamie:dev .
 ```
 
-Run the container with a persistent Docker volume:
+Run the locally built image:
 
 ```sh
-docker volume create pamie-data
 export PAMIE_TOKEN="$(openssl rand -hex 32)"
 docker run --rm \
   --name pamie \
