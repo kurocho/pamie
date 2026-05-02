@@ -1,0 +1,42 @@
+services:
+  pamie:
+    build:
+      context: .
+      args:
+        VERSION: ${PAMIE_VERSION:-dev}
+    image: ${PAMIE_IMAGE:-pamie:dev}
+    restart: unless-stopped
+    environment:
+      PAMIE_ADDR: 0.0.0.0:8080
+      PAMIE_DATA_DIR: /data
+      PAMIE_TOKEN: ${PAMIE_TOKEN:?set PAMIE_TOKEN to a long random token}
+      PAMIE_TOKEN_ID: ${PAMIE_TOKEN_ID:-primary}
+      PAMIE_TOKEN_SCOPES: ${PAMIE_TOKEN_SCOPES:-memory:read,memory:write,memory:delete,stats:read}
+      PAMIE_MCP_RATE_LIMIT: ${PAMIE_MCP_RATE_LIMIT:-120}
+      PAMIE_MCP_RATE_BURST: ${PAMIE_MCP_RATE_BURST:-30}
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - pamie-data:/data
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    profiles:
+      - https
+    depends_on:
+      - pamie
+    environment:
+      PAMIE_HOSTNAME: ${PAMIE_HOSTNAME:-pamie.localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile.example:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  pamie-data:
+  caddy-data:
+  caddy-config:

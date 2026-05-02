@@ -1,0 +1,19 @@
+{$PAMIE_HOSTNAME} {
+	encode zstd gzip
+
+	request_body {
+		max_size 1MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	@ops path /health /ready
+	respond @ops 404
+
+	reverse_proxy pamie:8080
+}
