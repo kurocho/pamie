@@ -174,6 +174,78 @@ pamie token rotate --id readonly
 pamie token revoke --id readonly
 ```
 
+## Connect MCP Clients
+
+Start Pamie and create a token for the MCP client. Use a separate token per client so it can be rotated or revoked independently:
+
+```sh
+pamie start
+pamie token create --id copilot --scopes memory:read,memory:write,stats:read
+```
+
+Copy the `bearer_token` printed by `pamie token create`. Use `memory:delete` only for clients that should be allowed to delete memories.
+
+### GitHub Copilot in VS Code
+
+Create `.vscode/mcp.json` in your workspace:
+
+```json
+{
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "pamie-token",
+      "description": "Pamie Bearer token",
+      "password": true
+    }
+  ],
+  "servers": {
+    "pamie": {
+      "type": "http",
+      "url": "http://127.0.0.1:17683/mcp",
+      "headers": {
+        "Authorization": "Bearer ${input:pamie-token}"
+      }
+    }
+  }
+}
+```
+
+Open Copilot Chat, switch to Agent mode, enable the Pamie server in the tools picker, then ask it to use `context_search` or `context_save`.
+
+### Codex CLI or IDE Extension
+
+Codex shares MCP configuration between the CLI and IDE extension:
+
+```sh
+export PAMIE_MCP_TOKEN="<token printed by pamie>"
+codex mcp add pamie \
+  --url http://127.0.0.1:17683/mcp \
+  --bearer-token-env-var PAMIE_MCP_TOKEN
+codex mcp list
+```
+
+Equivalent `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.pamie]
+url = "http://127.0.0.1:17683/mcp"
+bearer_token_env_var = "PAMIE_MCP_TOKEN"
+```
+
+### Claude Code
+
+Claude Code can connect to Pamie as an HTTP MCP server:
+
+```sh
+export PAMIE_MCP_TOKEN="<token printed by pamie>"
+claude mcp add --transport http pamie http://127.0.0.1:17683/mcp \
+  --header "Authorization: Bearer $PAMIE_MCP_TOKEN"
+claude mcp list
+```
+
+For Claude.ai custom connectors, `127.0.0.1` will not work because Claude connects from Anthropic infrastructure. Put Pamie behind HTTPS and keep Bearer authentication enabled before using it as a remote connector.
+
 Version output:
 
 ```sh
