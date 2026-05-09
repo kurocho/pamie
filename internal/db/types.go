@@ -20,6 +20,14 @@ const (
 	VectorBackendAuto       = "auto"
 	VectorBackendSQLiteJSON = "sqlite-json"
 	VectorBackendSQLiteVec  = "sqlite-vec"
+
+	EmbeddingScopeBody          = "body"
+	EmbeddingScopeTitleKeywords = "title_keywords"
+
+	EmbeddingIndexStatusPending = "pending"
+	EmbeddingIndexStatusIndexed = "indexed"
+	EmbeddingIndexStatusFailed  = "failed"
+	EmbeddingIndexStatusSkipped = "skipped"
 )
 
 // Tier identifies the lifecycle tier for a memory item.
@@ -69,6 +77,16 @@ type MemoryChunk struct {
 	CreatedAt  time.Time
 }
 
+// MemoryKeyword is a first-class retrieval keyword for a memory item.
+type MemoryKeyword struct {
+	MemoryID          string
+	KeywordIndex      int
+	Keyword           string
+	NormalizedKeyword string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
 // VectorMetadata describes one local vector index configuration.
 type VectorMetadata struct {
 	Provider       string
@@ -76,22 +94,24 @@ type VectorMetadata struct {
 	Dimensions     int
 	Backend        string
 	DistanceMetric string
+	EmbeddingScope string
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
 
 // MemoryEmbedding stores a vector embedding for one memory chunk.
 type MemoryEmbedding struct {
-	ChunkID       string
-	MemoryID      string
-	Provider      string
-	Model         string
-	Dimensions    int
-	EmbeddingJSON string
-	ContentHash   string
-	VectorRowID   int64
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ChunkID        string
+	MemoryID       string
+	Provider       string
+	Model          string
+	Dimensions     int
+	EmbeddingJSON  string
+	ContentHash    string
+	VectorRowID    int64
+	EmbeddingScope string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // EmbeddingTarget identifies the vector index used for storage or search.
@@ -99,6 +119,7 @@ type EmbeddingTarget struct {
 	Provider   string
 	Model      string
 	Dimensions int
+	Scope      string
 }
 
 // EmbeddingBackfillOptions selects chunks missing embeddings for one target.
@@ -106,6 +127,29 @@ type EmbeddingBackfillOptions struct {
 	Target EmbeddingTarget
 	Limit  int
 	Force  bool
+}
+
+// EmbeddingBackfillCandidate is an active memory chunk eligible for indexing.
+type EmbeddingBackfillCandidate struct {
+	Item     MemoryItem
+	Chunk    MemoryChunk
+	Keywords []MemoryKeyword
+}
+
+// EmbeddingIndexStatus records the latest indexing outcome for one chunk target.
+type EmbeddingIndexStatus struct {
+	ChunkID        string
+	MemoryID       string
+	Provider       string
+	Model          string
+	Dimensions     int
+	EmbeddingScope string
+	Status         string
+	ContentHash    string
+	ErrorSummary   string
+	Attempts       int
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // MemoryEvent records a durable memory mutation or lifecycle event.

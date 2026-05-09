@@ -27,7 +27,7 @@ Owner of MCP tool definitions and tool-level validation.
 - `context_recent`
 - `context_stats`
 
-Deletion is currently conservative soft deletion. Search uses FTS5 keyword search and optional local vector ranking through the memory service with safe filters, snippets, depth controls, and explainable score details. Lifecycle behavior supports deterministic promotion, demotion, archive, policy-controlled deletion, and the opt-in scheduled background runner.
+Deletion is currently conservative soft deletion. Search uses FTS5 keyword search and optional local vector ranking through the memory service with safe filters, snippets, depth controls, and explainable score details. `context_save` accepts keywords and `context_update` can replace the full keyword list; vectors are generated only from title and explicit keywords while body text remains the FTS5 source. Lifecycle behavior supports deterministic promotion, demotion, archive, policy-controlled deletion, and the opt-in scheduled background runner.
 
 Tool scopes:
 

@@ -61,6 +61,7 @@ type ExportManifest struct {
 type ExportRecordCounts struct {
 	MemoryItems       int `json:"memory_items"`
 	MemoryChunks      int `json:"memory_chunks"`
+	MemoryKeywords    int `json:"memory_keywords"`
 	MemoryEvents      int `json:"memory_events"`
 	RetentionPolicies int `json:"retention_policies"`
 	AccessLogs        int `json:"access_logs"`
@@ -74,6 +75,7 @@ type ExportChecksums struct {
 type exportData struct {
 	Items    []exportMemoryItem
 	Chunks   []exportMemoryChunk
+	Keywords []exportMemoryKeyword
 	Events   []exportMemoryEvent
 	Policies []exportRetentionPolicy
 	Access   []exportAccessLogEntry
@@ -88,6 +90,7 @@ type exportRecordLine struct {
 	Type            string                 `json:"type"`
 	MemoryItem      *exportMemoryItem      `json:"memory_item,omitempty"`
 	MemoryChunk     *exportMemoryChunk     `json:"memory_chunk,omitempty"`
+	MemoryKeyword   *exportMemoryKeyword   `json:"memory_keyword,omitempty"`
 	MemoryEvent     *exportMemoryEvent     `json:"memory_event,omitempty"`
 	RetentionPolicy *exportRetentionPolicy `json:"retention_policy,omitempty"`
 	AccessLog       *exportAccessLogEntry  `json:"access_log,omitempty"`
@@ -115,6 +118,15 @@ type exportMemoryChunk struct {
 	ChunkIndex int       `json:"chunk_index"`
 	Content    string    `json:"content"`
 	CreatedAt  time.Time `json:"created_at"`
+}
+
+type exportMemoryKeyword struct {
+	MemoryID          string    `json:"memory_id"`
+	KeywordIndex      int       `json:"keyword_index"`
+	Keyword           string    `json:"keyword"`
+	NormalizedKeyword string    `json:"normalized_keyword"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 type exportMemoryEvent struct {
@@ -263,6 +275,9 @@ func (s *Store) readExportData(ctx context.Context) (exportData, error) {
 	if data.Chunks, err = s.listExportMemoryChunks(ctx); err != nil {
 		return exportData{}, err
 	}
+	if data.Keywords, err = s.listExportMemoryKeywords(ctx); err != nil {
+		return exportData{}, err
+	}
 	if data.Events, err = s.listExportMemoryEvents(ctx); err != nil {
 		return exportData{}, err
 	}
@@ -340,6 +355,45 @@ ORDER BY memory_id, chunk_index, id`)
 		return nil, fmt.Errorf("export memory chunks: %w", err)
 	}
 	return chunks, nil
+}
+
+func (s *Store) listExportMemoryKeywords(ctx context.Context) ([]exportMemoryKeyword, error) {
+	rows, err := s.database.QueryContext(ctx, `
+SELECT memory_id, keyword_index, keyword, normalized_keyword, created_at, updated_at
+FROM memory_keywords
+ORDER BY memory_id, keyword_index`)
+	if err != nil {
+		return nil, fmt.Errorf("export memory keywords: %w", err)
+	}
+	defer rows.Close()
+
+	var keywords []exportMemoryKeyword
+	for rows.Next() {
+		var keyword exportMemoryKeyword
+		var createdAt, updatedAt string
+		if err := rows.Scan(
+			&keyword.MemoryID,
+			&keyword.KeywordIndex,
+			&keyword.Keyword,
+			&keyword.NormalizedKeyword,
+			&createdAt,
+			&updatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan memory keyword: %w", err)
+		}
+		var err error
+		if keyword.CreatedAt, err = parseTime(createdAt); err != nil {
+			return nil, fmt.Errorf("parse keyword created_at: %w", err)
+		}
+		if keyword.UpdatedAt, err = parseTime(updatedAt); err != nil {
+			return nil, fmt.Errorf("parse keyword updated_at: %w", err)
+		}
+		keywords = append(keywords, keyword)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("export memory keywords: %w", err)
+	}
+	return keywords, nil
 }
 
 func (s *Store) listExportMemoryEvents(ctx context.Context) ([]exportMemoryEvent, error) {
@@ -463,6 +517,12 @@ func marshalRecordLines(data exportData) ([][]byte, string, error) {
 			return nil, "", fmt.Errorf("encode memory chunk: %w", err)
 		}
 	}
+	for _, keyword := range data.Keywords {
+		keyword := keyword
+		if err := appendRecord(exportRecordLine{Type: "memory_keyword", MemoryKeyword: &keyword}); err != nil {
+			return nil, "", fmt.Errorf("encode memory keyword: %w", err)
+		}
+	}
 	for _, event := range data.Events {
 		event := event
 		if err := appendRecord(exportRecordLine{Type: "memory_event", MemoryEvent: &event}); err != nil {
@@ -580,6 +640,11 @@ func appendParsedRecord(data *exportData, record exportRecordLine) error {
 			return errors.New("memory_chunk record missing memory_chunk payload")
 		}
 		data.Chunks = append(data.Chunks, *record.MemoryChunk)
+	case "memory_keyword":
+		if record.MemoryKeyword == nil {
+			return errors.New("memory_keyword record missing memory_keyword payload")
+		}
+		data.Keywords = append(data.Keywords, *record.MemoryKeyword)
 	case "memory_event":
 		if record.MemoryEvent == nil {
 			return errors.New("memory_event record missing memory_event payload")
@@ -609,6 +674,9 @@ func countPayloads(record exportRecordLine) int {
 	if record.MemoryChunk != nil {
 		count++
 	}
+	if record.MemoryKeyword != nil {
+		count++
+	}
 	if record.MemoryEvent != nil {
 		count++
 	}
@@ -628,6 +696,8 @@ func validateImportData(manifest ExportManifest, data exportData) error {
 	memoryIDs := map[string]struct{}{}
 	chunkIDs := map[string]struct{}{}
 	chunkIndexes := map[string]struct{}{}
+	keywordIndexes := map[string]struct{}{}
+	keywordNormalized := map[string]struct{}{}
 	eventIDs := map[int64]struct{}{}
 	policyIDs := map[string]struct{}{}
 	accessIDs := map[int64]struct{}{}
@@ -682,6 +752,32 @@ func validateImportData(manifest ExportManifest, data exportData) error {
 			return fmt.Errorf("duplicate memory chunk index %d for memory %q", chunk.ChunkIndex, chunk.MemoryID)
 		}
 		chunkIndexes[indexKey] = struct{}{}
+	}
+	for _, keyword := range data.Keywords {
+		dbKeyword := MemoryKeyword{
+			MemoryID:          keyword.MemoryID,
+			KeywordIndex:      keyword.KeywordIndex,
+			Keyword:           keyword.Keyword,
+			NormalizedKeyword: keyword.NormalizedKeyword,
+			CreatedAt:         keyword.CreatedAt,
+			UpdatedAt:         keyword.UpdatedAt,
+		}
+		if err := validateMemoryKeyword(dbKeyword); err != nil {
+			return err
+		}
+		if _, exists := memoryIDs[keyword.MemoryID]; !exists {
+			return fmt.Errorf("memory keyword %q references missing memory %q", keyword.Keyword, keyword.MemoryID)
+		}
+		indexKey := keyword.MemoryID + "\x00" + fmt.Sprint(keyword.KeywordIndex)
+		if _, exists := keywordIndexes[indexKey]; exists {
+			return fmt.Errorf("duplicate memory keyword index %d for memory %q", keyword.KeywordIndex, keyword.MemoryID)
+		}
+		keywordIndexes[indexKey] = struct{}{}
+		normalizedKey := keyword.MemoryID + "\x00" + keyword.NormalizedKeyword
+		if _, exists := keywordNormalized[normalizedKey]; exists {
+			return fmt.Errorf("duplicate normalized memory keyword %q for memory %q", keyword.NormalizedKeyword, keyword.MemoryID)
+		}
+		keywordNormalized[normalizedKey] = struct{}{}
 	}
 	for _, event := range data.Events {
 		if event.ID <= 0 {
@@ -880,6 +976,22 @@ func applyImport(ctx context.Context, tx *Tx, data exportData) error {
 			return err
 		}
 	}
+	keywordsByMemory := map[string][]MemoryKeyword{}
+	for _, keyword := range data.Keywords {
+		keywordsByMemory[keyword.MemoryID] = append(keywordsByMemory[keyword.MemoryID], MemoryKeyword{
+			MemoryID:          keyword.MemoryID,
+			KeywordIndex:      keyword.KeywordIndex,
+			Keyword:           keyword.Keyword,
+			NormalizedKeyword: keyword.NormalizedKeyword,
+			CreatedAt:         keyword.CreatedAt,
+			UpdatedAt:         keyword.UpdatedAt,
+		})
+	}
+	for memoryID, keywords := range keywordsByMemory {
+		if err := tx.Memories().ReplaceKeywords(ctx, memoryID, keywords); err != nil {
+			return err
+		}
+	}
 	for _, event := range data.Events {
 		if err := insertMemoryEvent(ctx, tx.tx, event); err != nil {
 			return err
@@ -950,6 +1062,7 @@ func (data exportData) counts() ExportRecordCounts {
 	return ExportRecordCounts{
 		MemoryItems:       len(data.Items),
 		MemoryChunks:      len(data.Chunks),
+		MemoryKeywords:    len(data.Keywords),
 		MemoryEvents:      len(data.Events),
 		RetentionPolicies: len(data.Policies),
 		AccessLogs:        len(data.Access),
@@ -957,5 +1070,5 @@ func (data exportData) counts() ExportRecordCounts {
 }
 
 func (data exportData) totalRecords() int {
-	return len(data.Items) + len(data.Chunks) + len(data.Events) + len(data.Policies) + len(data.Access)
+	return len(data.Items) + len(data.Chunks) + len(data.Keywords) + len(data.Events) + len(data.Policies) + len(data.Access)
 }

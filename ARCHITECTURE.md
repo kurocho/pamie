@@ -32,7 +32,7 @@ Structured JSON logging uses Go's standard `log/slog` package. Request logging r
 
 Lifecycle worker configuration is opt-in through `PAMIE_LIFECYCLE_WORKER_ENABLED` / `--lifecycle-worker`. Operators can set the interval, batch size, run-on-start behavior, and startup delay without changing retention policy semantics.
 
-Vector search configuration is opt-in through `PAMIE_VECTOR_SEARCH_ENABLED` / `--vector-search`. Built-in providers are `local-hash` and `ollama`; backends are `auto`, `sqlite-json`, and `sqlite-vec`.
+Vector search is enabled by default with the dependency-free `local-hash` provider and can be disabled through `PAMIE_VECTOR_SEARCH_ENABLED=false` / `--vector-search=false`. Built-in providers are `local-hash` and `ollama`; backends are `auto`, `sqlite-json`, and `sqlite-vec`.
 
 ## Package Boundaries
 
@@ -61,12 +61,14 @@ Implemented core tables:
 
 - `memory_items`: canonical memory records and metadata.
 - `memory_chunks`: searchable text chunks derived from memory records.
+- `memory_keywords`: explicit semantic retrieval keywords supplied by agents.
 - `memory_events`: append-only lifecycle and mutation history.
 - `retention_policies`: explicit rules for demotion, archive, and deletion.
 - `access_log`: retrieval and access events used for ranking and promotion.
 - `memory_fts`: FTS5 index maintained by chunk triggers for keyword search.
 - `vector_metadata`: optional local vector backend metadata.
 - `memory_embeddings`: optional chunk embeddings for hybrid ranking.
+- `embedding_index_status`: durable title/keywords embedding indexing outcomes.
 
 ## Search
 
@@ -84,7 +86,7 @@ Implemented search behavior combines:
 
 `context_search` supports tier, pinned, source, metadata equality, creation/update time bounds, deletion inclusion, limits, and `shallow`/`standard`/`deep` candidate depth. Results include snippets and explainable score details.
 
-Vector search is optional and disabled by default. When enabled, the memory service embeds saved and updated chunks with a local provider, stores vectors in SQLite, and search blends vector similarity with the existing keyword and lifecycle signals. The `sqlite-vec` backend uses local `vec0` virtual tables for accelerated nearest-neighbor lookup; `sqlite-json` remains the portable fallback. The `ollama` provider gives operators a local semantic embedding path when a local Ollama server is running.
+Vector search is enabled by default. The memory service embeds only saved memory titles and explicit keywords with a local provider, stores `title_keywords` vectors in SQLite, and search blends vector similarity with the existing keyword and lifecycle signals. Full bodies are never sent to embedding providers; they remain durably stored and fully indexed by FTS5. The `sqlite-vec` backend uses local `vec0` virtual tables for accelerated nearest-neighbor lookup; `sqlite-json` remains the portable fallback. The `ollama` provider gives operators a local semantic embedding path when a local Ollama server is running, with optional local-only autostart.
 
 ## Memory Tiers
 

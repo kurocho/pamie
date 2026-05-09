@@ -34,7 +34,7 @@ Fields:
 
 ## `memory_chunks`
 
-Searchable chunks derived from memory items.
+Searchable chunks derived from memory items. Pamie currently stores one full-body chunk per memory so FTS5 can search the complete body.
 
 Fields:
 
@@ -53,6 +53,19 @@ FTS5 virtual table for chunk content. It stores:
 - `chunk_id`
 
 Triggers on `memory_chunks` keep this table synchronized for insert, update, and delete operations. Phase 5 will add query and ranking behavior on top of this index.
+
+## `memory_keywords`
+
+First-class semantic retrieval keywords supplied by agents. These values are used with the memory title for the `title_keywords` vector embedding scope.
+
+Fields:
+
+- `memory_id`
+- `keyword_index`
+- `keyword`
+- `normalized_keyword`
+- `created_at`
+- `updated_at`
 
 ## `memory_events`
 
@@ -106,3 +119,55 @@ Fields:
 - `last_used_at`
 - `revoked_at`
 - `expires_at`
+
+## `vector_metadata`
+
+Optional local vector backend metadata by provider and model.
+
+Fields:
+
+- `provider`
+- `model`
+- `dimensions`
+- `backend`
+- `distance_metric`
+- `embedding_scope`
+- `created_at`
+- `updated_at`
+
+## `memory_embeddings`
+
+Optional local vector rows anchored to memory chunks. New rows use `embedding_scope = title_keywords` and their `content_hash` is computed from the deterministic title/keywords embedding document, not from the body.
+
+Fields:
+
+- `chunk_id`
+- `memory_id`
+- `provider`
+- `model`
+- `dimensions`
+- `embedding_json`
+- `content_hash`
+- `created_at`
+- `updated_at`
+- `vector_rowid`
+- `embedding_scope`
+
+## `embedding_index_status`
+
+Durable status for best-effort embedding indexing.
+
+Fields:
+
+- `chunk_id`
+- `memory_id`
+- `provider`
+- `model`
+- `dimensions`
+- `embedding_scope`
+- `status`
+- `content_hash`
+- `error_summary`
+- `attempts`
+- `created_at`
+- `updated_at`

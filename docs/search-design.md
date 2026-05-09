@@ -4,7 +4,9 @@ Search uses SQLite FTS5 with an optional local vector path and a ranking layer t
 
 ## Current Implementation
 
-`context_search` uses SQLite FTS5 keyword search over `memory_chunks`. Query text is sanitized into quoted FTS terms instead of exposing raw FTS syntax to MCP clients. When vector search is enabled, the same query text is embedded locally and used to add vector candidates after the safe filters are applied.
+`context_search` uses SQLite FTS5 keyword search over `memory_chunks`. The chunk content is the full memory body, so exact keyword search can find text anywhere in the stored body. Query text is sanitized into quoted FTS terms instead of exposing raw FTS syntax to MCP clients. When vector search is enabled, the bounded query text is embedded locally and used to add vector candidates after the safe filters are applied.
+
+Saved memory embeddings use the `title_keywords` scope. Pamie embeds only the memory title and explicit agent-provided keywords. Body text, body excerpts, generated summaries, and metadata values are not sent to embedding providers unless the agent also supplies them as keywords.
 
 Results exclude soft-deleted memories by default and support:
 
@@ -54,7 +56,7 @@ The current score is additive and explainable:
 total = keyword + vector + recency + tier + pinned + importance + access
 ```
 
-FTS5 `bm25` is used as the keyword signal. Vector similarity uses cosine similarity and is capped as one score component rather than the whole policy. Recency uses the newest of `updated_at` and `last_accessed_at`. Tier boosts prioritize `working`, then `hot`, `warm`, and `cold`; archive receives no tier boost. Pinned memories, important memories, and recently accessed memories receive additional boosts.
+FTS5 `bm25` is used as the keyword signal. Vector similarity uses title/keywords-scope embeddings with cosine similarity and is capped as one score component rather than the whole policy. Recency uses the newest of `updated_at` and `last_accessed_at`. Tier boosts prioritize `working`, then `hot`, `warm`, and `cold`; archive receives no tier boost. Pinned memories, important memories, and recently accessed memories receive additional boosts.
 
 The database first asks FTS5 for a candidate set, optionally asks the configured vector backend for nearest neighbors, then the repository merges candidates by memory ID and re-ranks them in Go. `depth` controls FTS candidate breadth:
 
@@ -68,11 +70,13 @@ With the `sqlite-vec` backend, vector candidate lookup uses a local `vec0` virtu
 
 Search results should include snippets that help the agent decide whether to retrieve the full memory. Snippets must not be treated as trusted instructions.
 
-The current snippet comes from SQLite FTS5 over the matching chunk when there is a keyword match. Vector-only matches use a plain chunk preview. Snippets are previews, not summaries and not instructions.
+The current snippet comes from SQLite FTS5 over the matching chunk when there is a keyword match. Vector-only matches use a plain chunk preview and include `vector_match: true` so clients do not mistake the preview for a semantic body match. Snippets are previews, not summaries and not instructions.
 
 ## Vector Disabled Fallback
 
-Vector search is disabled by default. With vector search disabled, `context_search` remains keyword-only and ignores stored embeddings. Existing FTS5 behavior and safe filters remain the baseline path.
+Vector search is enabled by default with the dependency-free `local-hash` provider. With vector search disabled, `context_search` remains keyword-only and ignores stored embeddings. Existing FTS5 behavior and safe filters remain the baseline path.
+
+Embedding provider failures also degrade to FTS-only behavior. Save and update operations still persist the memory and record indexing status when embedding fails or is skipped. Search falls back to FTS-only if query embedding fails.
 
 ## Vector Backends
 

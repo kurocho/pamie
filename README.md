@@ -12,6 +12,15 @@ Docker Hub: <https://hub.docker.com/repository/docker/kurocho/pamie/general>
 
 Pamie is a self-hosted, local-first, provider-independent long-term memory server for MCP agents. It runs as a single Go binary exposing an MCP HTTP endpoint protected by Bearer token authentication, with SQLite and FTS5 as durable local storage. Its memory lifecycle is inspired by Elasticsearch ILM and human memory: fresh memories are fast and prominent, old memories remain available, important memories stay easy to retrieve, and access patterns can promote useful memories back into higher tiers.
 
+## v1.1.0 Highlights
+
+- `pamie start`, `pamie status`, and `pamie stop` manage a local background server on `127.0.0.1:17683`.
+- First start creates a persistent hashed Bearer token and prints the raw token once; `pamie token` rotates it later.
+- Vector search is enabled by default with local `local-hash` embeddings.
+- Ollama semantic embeddings now use short commands: `pamie start --vector-provider ollama` and `pamie embeddings backfill --provider ollama --limit 500`.
+- Vector embeddings use only memory titles and explicit `keywords`; full bodies remain in SQLite FTS5 and are not sent to embedding providers.
+- Operator commands default to the running daemon database path, so `pamie token list` follows a daemon started with `--db-path`.
+
 ## Problem
 
 MCP agents can act on tools, but many deployments still lack a durable memory layer that is:
@@ -185,28 +194,25 @@ pamie backup --format ndjson --db-path data/pamie.db --out backup.ndjson
 pamie restore --format ndjson --db-path restored.db --in backup.ndjson --dry-run
 ```
 
-Optional vector search with Ollama:
+Vector search is enabled by default with dependency-free local hash embeddings. To use Ollama semantic embeddings instead:
 
 ```sh
 ollama serve
 ollama pull embeddinggemma
+pamie start --vector-provider ollama
 ```
 
-Then start Pamie with local semantic embeddings:
+If you want Pamie to start a local Ollama process when one is not already running:
 
 ```sh
-pamie start \
-  --addr 127.0.0.1:17683 \
-  --vector-search \
-  --vector-backend auto \
-  --vector-provider ollama \
-  --vector-model embeddinggemma \
-  --vector-dimensions 384
+pamie start --vector-provider ollama --vector-ollama-autostart
 
-pamie embeddings backfill --provider ollama --model embeddinggemma --dimensions 384 --backend auto --limit 500
+pamie embeddings backfill --provider ollama --limit 500
 ```
 
-Vector search is off by default. Keep it disabled with the default settings, or pass `--vector-search=false` to override an environment setting. The `ollama` provider expects a local Ollama server. `embeddinggemma` is the default 384-dimensional embedding model; use `local-hash` for dependency-free deterministic test embeddings. Vector search improves semantic recall for paraphrases and conceptually similar memories while FTS5 still handles exact keyword matches, filters, snippets, and deterministic ranking signals.
+Pass `--vector-search=false` to disable hybrid vector ranking. The `ollama` provider expects a local Ollama server unless opt-in autostart is enabled with `--vector-ollama-autostart`. `embeddinggemma` is the default 384-dimensional embedding model; `local-hash` is the default dependency-free deterministic provider.
+
+Pamie embeds only memory titles and explicit `keywords` for vector search. Full memory bodies are still stored and indexed by SQLite FTS5 for exact keyword search, but body text is not sent to embedding providers. For long notes, provide keywords with people names, project names, aliases, technologies, decisions, ticket IDs, error messages, dates, and other terms that should retrieve the memory later.
 
 ## Docker
 
@@ -290,7 +296,7 @@ docker compose run --rm --no-deps \
 
 Docker and release foundation is implemented for the current surface. The Go module starts an HTTP server with structured logging, `/health`, `/ready`, Bearer-protected `/mcp`, configuration from flags and environment, persistent hashed tokens, token rotation and revocation commands, scoped token principals, per-client `/mcp` rate limiting, structured audit events, graceful shutdown, SQLite startup with migrations, WAL mode, foreign keys, initial tables, typed repository methods, MCP JSON-RPC handling, memory tools, first-use MCP instructions, safe read-only resources, deterministic tier lifecycle rules, access-based promotion, retention-policy deletion, lifecycle events, an opt-in scheduled lifecycle worker, FTS5-backed search with safe filters, snippets, depth controls, explainable ranking, optional local vector storage and hybrid ranking with sqlite-vec acceleration, local backup, restore, and embedding backfill operator commands, Docker/Compose assets, Caddy HTTPS guidance, and release artifact automation.
 
-Vector search is disabled by default and supports `local-hash` deterministic embeddings, local Ollama semantic embeddings, SQLite JSON fallback storage, and sqlite-vec acceleration. Tamper-proof audit log storage is still future hardening work.
+Vector search is enabled by default and supports title/keywords-only `local-hash` deterministic embeddings, local Ollama semantic embeddings, SQLite JSON fallback storage, sqlite-vec acceleration, durable indexing status, and opt-in local Ollama autostart. Tamper-proof audit log storage is still future hardening work.
 
 ## Roadmap
 

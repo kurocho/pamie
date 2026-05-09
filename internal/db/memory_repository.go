@@ -271,6 +271,88 @@ ORDER BY chunk_index`, memoryID)
 	return chunks, nil
 }
 
+// ReplaceKeywords replaces the full keyword set for a memory item.
+func (r *MemoryRepository) ReplaceKeywords(ctx context.Context, memoryID string, keywords []MemoryKeyword) error {
+	if err := requireID("memory", memoryID); err != nil {
+		return err
+	}
+	if _, err := r.exec.ExecContext(ctx, "DELETE FROM memory_keywords WHERE memory_id = ?", memoryID); err != nil {
+		return fmt.Errorf("delete memory keywords: %w", err)
+	}
+	for _, keyword := range keywords {
+		keyword.MemoryID = memoryID
+		if err := validateMemoryKeyword(keyword); err != nil {
+			return err
+		}
+		_, err := r.exec.ExecContext(ctx, `
+INSERT INTO memory_keywords (
+  memory_id, keyword_index, keyword, normalized_keyword, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?)`,
+			keyword.MemoryID,
+			keyword.KeywordIndex,
+			keyword.Keyword,
+			keyword.NormalizedKeyword,
+			formatTime(keyword.CreatedAt),
+			formatTime(keyword.UpdatedAt),
+		)
+		if err != nil {
+			return fmt.Errorf("insert memory keyword: %w", err)
+		}
+	}
+	return nil
+}
+
+// ListKeywords returns keywords for one memory item in display order.
+func (r *MemoryRepository) ListKeywords(ctx context.Context, memoryID string) ([]MemoryKeyword, error) {
+	if err := requireID("memory", memoryID); err != nil {
+		return nil, err
+	}
+	rows, err := r.exec.QueryContext(ctx, `
+SELECT memory_id, keyword_index, keyword, normalized_keyword, created_at, updated_at
+FROM memory_keywords
+WHERE memory_id = ?
+ORDER BY keyword_index`, memoryID)
+	if err != nil {
+		return nil, fmt.Errorf("list memory keywords: %w", err)
+	}
+	defer rows.Close()
+	return scanMemoryKeywords(rows)
+}
+
+// ListKeywordsForMemories returns keywords keyed by memory ID.
+func (r *MemoryRepository) ListKeywordsForMemories(ctx context.Context, memoryIDs []string) (map[string][]MemoryKeyword, error) {
+	out := make(map[string][]MemoryKeyword, len(memoryIDs))
+	if len(memoryIDs) == 0 {
+		return out, nil
+	}
+	placeholders := make([]string, 0, len(memoryIDs))
+	args := make([]any, 0, len(memoryIDs))
+	for _, memoryID := range memoryIDs {
+		if err := requireID("memory", memoryID); err != nil {
+			return nil, err
+		}
+		placeholders = append(placeholders, "?")
+		args = append(args, memoryID)
+	}
+	rows, err := r.exec.QueryContext(ctx, `
+SELECT memory_id, keyword_index, keyword, normalized_keyword, created_at, updated_at
+FROM memory_keywords
+WHERE memory_id IN (`+strings.Join(placeholders, ",")+`)
+ORDER BY memory_id, keyword_index`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list memory keywords: %w", err)
+	}
+	defer rows.Close()
+	keywords, err := scanMemoryKeywords(rows)
+	if err != nil {
+		return nil, err
+	}
+	for _, keyword := range keywords {
+		out[keyword.MemoryID] = append(out[keyword.MemoryID], keyword)
+	}
+	return out, nil
+}
+
 // UpsertVectorMetadata records the local vector index configuration.
 func (r *MemoryRepository) UpsertVectorMetadata(ctx context.Context, metadata VectorMetadata) error {
 	if err := validateVectorMetadata(metadata); err != nil {
@@ -281,24 +363,27 @@ func (r *MemoryRepository) UpsertVectorMetadata(ctx context.Context, metadata Ve
 			Provider:   metadata.Provider,
 			Model:      metadata.Model,
 			Dimensions: metadata.Dimensions,
+			Scope:      metadata.EmbeddingScope,
 		}); err != nil {
 			return err
 		}
 	}
 	_, err := r.exec.ExecContext(ctx, `
 INSERT INTO vector_metadata (
-  provider, model, dimensions, backend, distance_metric, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?)
+  provider, model, dimensions, backend, distance_metric, embedding_scope, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(provider, model) DO UPDATE SET
   dimensions = excluded.dimensions,
   backend = excluded.backend,
   distance_metric = excluded.distance_metric,
+  embedding_scope = excluded.embedding_scope,
   updated_at = excluded.updated_at`,
 		metadata.Provider,
 		metadata.Model,
 		metadata.Dimensions,
 		metadata.Backend,
 		metadata.DistanceMetric,
+		metadata.EmbeddingScope,
 		formatTime(metadata.CreatedAt),
 		formatTime(metadata.UpdatedAt),
 	)
@@ -311,21 +396,22 @@ ON CONFLICT(provider, model) DO UPDATE SET
 // UpsertEmbedding stores or replaces the embedding for one memory chunk.
 func (r *MemoryRepository) UpsertEmbedding(ctx context.Context, embedding MemoryEmbedding) error {
 	if embedding.VectorRowID == 0 {
-		embedding.VectorRowID = vectorRowID(embedding.ChunkID, embedding.Provider, embedding.Model)
+		embedding.VectorRowID = vectorRowID(embedding.ChunkID, embedding.Provider, embedding.Model, embedding.EmbeddingScope)
 	}
 	if err := validateMemoryEmbedding(embedding); err != nil {
 		return err
 	}
 	_, err := r.exec.ExecContext(ctx, `
 INSERT INTO memory_embeddings (
-  chunk_id, memory_id, provider, model, dimensions, embedding_json, content_hash, vector_rowid, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  chunk_id, memory_id, provider, model, dimensions, embedding_json, content_hash, vector_rowid, embedding_scope, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(chunk_id, provider, model) DO UPDATE SET
   memory_id = excluded.memory_id,
   dimensions = excluded.dimensions,
   embedding_json = excluded.embedding_json,
   content_hash = excluded.content_hash,
   vector_rowid = excluded.vector_rowid,
+  embedding_scope = excluded.embedding_scope,
   updated_at = excluded.updated_at`,
 		embedding.ChunkID,
 		embedding.MemoryID,
@@ -335,6 +421,7 @@ ON CONFLICT(chunk_id, provider, model) DO UPDATE SET
 		embedding.EmbeddingJSON,
 		embedding.ContentHash,
 		embedding.VectorRowID,
+		embedding.EmbeddingScope,
 		formatTime(embedding.CreatedAt),
 		formatTime(embedding.UpdatedAt),
 	)
@@ -345,6 +432,7 @@ ON CONFLICT(chunk_id, provider, model) DO UPDATE SET
 		Provider:   embedding.Provider,
 		Model:      embedding.Model,
 		Dimensions: embedding.Dimensions,
+		Scope:      embedding.EmbeddingScope,
 	})
 	if err != nil {
 		return err
@@ -367,10 +455,10 @@ func (r *MemoryRepository) ListEmbeddings(ctx context.Context, memoryID string, 
 	}
 
 	rows, err := r.exec.QueryContext(ctx, `
-SELECT chunk_id, memory_id, provider, model, dimensions, embedding_json, content_hash, vector_rowid, created_at, updated_at
+SELECT chunk_id, memory_id, provider, model, dimensions, embedding_json, content_hash, vector_rowid, embedding_scope, created_at, updated_at
 FROM memory_embeddings
-WHERE memory_id = ? AND provider = ? AND model = ? AND dimensions = ?
-ORDER BY chunk_id`, memoryID, target.Provider, target.Model, target.Dimensions)
+WHERE memory_id = ? AND provider = ? AND model = ? AND dimensions = ? AND embedding_scope = ?
+ORDER BY chunk_id`, memoryID, target.Provider, target.Model, target.Dimensions, target.Scope)
 	if err != nil {
 		return nil, fmt.Errorf("list memory embeddings: %w", err)
 	}
@@ -392,6 +480,19 @@ ORDER BY chunk_id`, memoryID, target.Provider, target.Model, target.Dimensions)
 
 // ListChunksMissingEmbeddings returns active chunks without an embedding for the target.
 func (r *MemoryRepository) ListChunksMissingEmbeddings(ctx context.Context, opts EmbeddingBackfillOptions) ([]MemoryChunk, error) {
+	candidates, err := r.ListEmbeddingBackfillCandidates(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	chunks := make([]MemoryChunk, 0, len(candidates))
+	for _, candidate := range candidates {
+		chunks = append(chunks, candidate.Chunk)
+	}
+	return chunks, nil
+}
+
+// ListEmbeddingBackfillCandidates returns active memories needing scoped embedding work.
+func (r *MemoryRepository) ListEmbeddingBackfillCandidates(ctx context.Context, opts EmbeddingBackfillOptions) ([]EmbeddingBackfillCandidate, error) {
 	if err := validateEmbeddingTarget(opts.Target); err != nil {
 		return nil, err
 	}
@@ -400,7 +501,11 @@ func (r *MemoryRepository) ListChunksMissingEmbeddings(ctx context.Context, opts
 	}
 
 	rows, err := r.exec.QueryContext(ctx, `
-SELECT memory_chunks.id, memory_chunks.memory_id, memory_chunks.chunk_index,
+SELECT memory_items.id, memory_items.title, memory_items.body, memory_items.source,
+       memory_items.metadata_json, memory_items.tier, memory_items.importance,
+       memory_items.pinned, memory_items.created_at, memory_items.updated_at,
+       memory_items.last_accessed_at, memory_items.archived_at, memory_items.deleted_at,
+       memory_chunks.id, memory_chunks.memory_id, memory_chunks.chunk_index,
        memory_chunks.content, memory_chunks.created_at
 FROM memory_chunks
 JOIN memory_items ON memory_items.id = memory_chunks.memory_id
@@ -409,32 +514,93 @@ LEFT JOIN memory_embeddings
  AND memory_embeddings.provider = ?
  AND memory_embeddings.model = ?
  AND memory_embeddings.dimensions = ?
+ AND memory_embeddings.embedding_scope = ?
+LEFT JOIN embedding_index_status
+  ON embedding_index_status.chunk_id = memory_chunks.id
+ AND embedding_index_status.provider = ?
+ AND embedding_index_status.model = ?
+ AND embedding_index_status.embedding_scope = ?
 WHERE memory_items.deleted_at IS NULL
-  AND (? OR memory_embeddings.chunk_id IS NULL)
+  AND (
+    ?
+    OR memory_embeddings.chunk_id IS NULL
+    OR embedding_index_status.status = 'failed'
+  )
 ORDER BY memory_chunks.created_at, memory_chunks.id
-LIMIT ?`, opts.Target.Provider, opts.Target.Model, opts.Target.Dimensions, boolInt(opts.Force), opts.Limit)
+LIMIT ?`,
+		opts.Target.Provider,
+		opts.Target.Model,
+		opts.Target.Dimensions,
+		opts.Target.Scope,
+		opts.Target.Provider,
+		opts.Target.Model,
+		opts.Target.Scope,
+		boolInt(opts.Force),
+		opts.Limit,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("list chunks missing embeddings: %w", err)
+		return nil, fmt.Errorf("list embedding backfill candidates: %w", err)
 	}
 	defer rows.Close()
 
-	var chunks []MemoryChunk
+	var candidates []EmbeddingBackfillCandidate
+	var memoryIDs []string
 	for rows.Next() {
-		var chunk MemoryChunk
-		var createdAt string
-		if err := rows.Scan(&chunk.ID, &chunk.MemoryID, &chunk.ChunkIndex, &chunk.Content, &createdAt); err != nil {
-			return nil, fmt.Errorf("scan embedding chunk: %w", err)
+		candidate, err := scanEmbeddingBackfillCandidate(rows)
+		if err != nil {
+			return nil, err
 		}
-		var err error
-		if chunk.CreatedAt, err = parseTime(createdAt); err != nil {
-			return nil, fmt.Errorf("parse chunk created_at: %w", err)
-		}
-		chunks = append(chunks, chunk)
+		candidates = append(candidates, candidate)
+		memoryIDs = append(memoryIDs, candidate.Item.ID)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list chunks missing embeddings: %w", err)
+		return nil, fmt.Errorf("list embedding backfill candidates: %w", err)
 	}
-	return chunks, nil
+	keywordsByMemory, err := r.ListKeywordsForMemories(ctx, memoryIDs)
+	if err != nil {
+		return nil, err
+	}
+	for index := range candidates {
+		candidates[index].Keywords = keywordsByMemory[candidates[index].Item.ID]
+	}
+	return candidates, nil
+}
+
+// UpsertEmbeddingIndexStatus records the latest best-effort indexing result.
+func (r *MemoryRepository) UpsertEmbeddingIndexStatus(ctx context.Context, status EmbeddingIndexStatus) error {
+	if err := validateEmbeddingIndexStatus(status); err != nil {
+		return err
+	}
+	_, err := r.exec.ExecContext(ctx, `
+INSERT INTO embedding_index_status (
+  chunk_id, memory_id, provider, model, dimensions, embedding_scope,
+  status, content_hash, error_summary, attempts, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(chunk_id, provider, model, embedding_scope) DO UPDATE SET
+  memory_id = excluded.memory_id,
+  dimensions = excluded.dimensions,
+  status = excluded.status,
+  content_hash = excluded.content_hash,
+  error_summary = excluded.error_summary,
+  attempts = embedding_index_status.attempts + excluded.attempts,
+  updated_at = excluded.updated_at`,
+		status.ChunkID,
+		status.MemoryID,
+		status.Provider,
+		status.Model,
+		status.Dimensions,
+		status.EmbeddingScope,
+		status.Status,
+		status.ContentHash,
+		status.ErrorSummary,
+		status.Attempts,
+		formatTime(status.CreatedAt),
+		formatTime(status.UpdatedAt),
+	)
+	if err != nil {
+		return fmt.Errorf("upsert embedding index status: %w", err)
+	}
+	return nil
 }
 
 // Search performs FTS-backed or hybrid memory search with safe filters and explainable ranking.
@@ -597,6 +763,7 @@ func (r *MemoryRepository) searchVectorCandidates(ctx context.Context, opts Sear
 		"memory_embeddings.provider = ?",
 		"memory_embeddings.model = ?",
 		"memory_embeddings.dimensions = ?",
+		"memory_embeddings.embedding_scope = ?",
 	)
 	args := []any{formatTime(opts.Now.Add(-30 * 24 * time.Hour))}
 	args = append(args, memoryArgs...)
@@ -604,6 +771,7 @@ func (r *MemoryRepository) searchVectorCandidates(ctx context.Context, opts Sear
 		opts.Vector.Target.Provider,
 		opts.Vector.Target.Model,
 		opts.Vector.Target.Dimensions,
+		opts.Vector.Target.Scope,
 		vectorScanLimit,
 	)
 
@@ -682,6 +850,7 @@ func (r *MemoryRepository) searchSQLiteVecCandidates(ctx context.Context, opts S
 		"memory_embeddings.provider = ?",
 		"memory_embeddings.model = ?",
 		"memory_embeddings.dimensions = ?",
+		"memory_embeddings.embedding_scope = ?",
 		"memory_embeddings.vector_rowid IS NOT NULL",
 	)
 	queryEmbedding, err := encodeEmbeddingJSON(opts.Vector.QueryEmbedding)
@@ -694,6 +863,7 @@ func (r *MemoryRepository) searchSQLiteVecCandidates(ctx context.Context, opts S
 		opts.Vector.Target.Provider,
 		opts.Vector.Target.Model,
 		opts.Vector.Target.Dimensions,
+		opts.Vector.Target.Scope,
 		vectorScanLimit,
 	)
 
@@ -1003,6 +1173,89 @@ func scanMemoryItem(row scanner) (MemoryItem, error) {
 	return item, nil
 }
 
+func scanMemoryKeywords(rows *sql.Rows) ([]MemoryKeyword, error) {
+	var keywords []MemoryKeyword
+	for rows.Next() {
+		var keyword MemoryKeyword
+		var createdAt, updatedAt string
+		if err := rows.Scan(
+			&keyword.MemoryID,
+			&keyword.KeywordIndex,
+			&keyword.Keyword,
+			&keyword.NormalizedKeyword,
+			&createdAt,
+			&updatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan memory keyword: %w", err)
+		}
+		var err error
+		if keyword.CreatedAt, err = parseTime(createdAt); err != nil {
+			return nil, fmt.Errorf("parse keyword created_at: %w", err)
+		}
+		if keyword.UpdatedAt, err = parseTime(updatedAt); err != nil {
+			return nil, fmt.Errorf("parse keyword updated_at: %w", err)
+		}
+		keywords = append(keywords, keyword)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list memory keywords: %w", err)
+	}
+	return keywords, nil
+}
+
+func scanEmbeddingBackfillCandidate(row scanner) (EmbeddingBackfillCandidate, error) {
+	var item MemoryItem
+	var chunk MemoryChunk
+	var tier string
+	var pinned int
+	var itemCreatedAt, itemUpdatedAt, chunkCreatedAt string
+	var lastAccessedAt, archivedAt, deletedAt sql.NullString
+	if err := row.Scan(
+		&item.ID,
+		&item.Title,
+		&item.Body,
+		&item.Source,
+		&item.MetadataJSON,
+		&tier,
+		&item.Importance,
+		&pinned,
+		&itemCreatedAt,
+		&itemUpdatedAt,
+		&lastAccessedAt,
+		&archivedAt,
+		&deletedAt,
+		&chunk.ID,
+		&chunk.MemoryID,
+		&chunk.ChunkIndex,
+		&chunk.Content,
+		&chunkCreatedAt,
+	); err != nil {
+		return EmbeddingBackfillCandidate{}, fmt.Errorf("scan embedding backfill candidate: %w", err)
+	}
+	var err error
+	item.Tier = Tier(tier)
+	item.Pinned = intBool(pinned)
+	if item.CreatedAt, err = parseTime(itemCreatedAt); err != nil {
+		return EmbeddingBackfillCandidate{}, fmt.Errorf("parse created_at: %w", err)
+	}
+	if item.UpdatedAt, err = parseTime(itemUpdatedAt); err != nil {
+		return EmbeddingBackfillCandidate{}, fmt.Errorf("parse updated_at: %w", err)
+	}
+	if item.LastAccessedAt, err = parseNullableTime(lastAccessedAt); err != nil {
+		return EmbeddingBackfillCandidate{}, fmt.Errorf("parse last_accessed_at: %w", err)
+	}
+	if item.ArchivedAt, err = parseNullableTime(archivedAt); err != nil {
+		return EmbeddingBackfillCandidate{}, fmt.Errorf("parse archived_at: %w", err)
+	}
+	if item.DeletedAt, err = parseNullableTime(deletedAt); err != nil {
+		return EmbeddingBackfillCandidate{}, fmt.Errorf("parse deleted_at: %w", err)
+	}
+	if chunk.CreatedAt, err = parseTime(chunkCreatedAt); err != nil {
+		return EmbeddingBackfillCandidate{}, fmt.Errorf("parse chunk created_at: %w", err)
+	}
+	return EmbeddingBackfillCandidate{Item: item, Chunk: chunk}, nil
+}
+
 func scanMemorySearchResult(row scanner, now time.Time) (SearchResult, error) {
 	var item MemoryItem
 	var result SearchResult
@@ -1197,6 +1450,7 @@ func scanMemoryEmbedding(row scanner) (MemoryEmbedding, error) {
 		&embedding.EmbeddingJSON,
 		&embedding.ContentHash,
 		&vectorRowID,
+		&embedding.EmbeddingScope,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
@@ -1330,6 +1584,28 @@ func validateMemoryChunk(chunk MemoryChunk) error {
 	return nil
 }
 
+func validateMemoryKeyword(keyword MemoryKeyword) error {
+	if err := requireID("memory", keyword.MemoryID); err != nil {
+		return err
+	}
+	if keyword.KeywordIndex < 0 {
+		return fmt.Errorf("%w: keyword index must not be negative", ErrInvalid)
+	}
+	if strings.TrimSpace(keyword.Keyword) == "" {
+		return fmt.Errorf("%w: keyword must not be empty", ErrInvalid)
+	}
+	if strings.TrimSpace(keyword.NormalizedKeyword) == "" {
+		return fmt.Errorf("%w: normalized keyword must not be empty", ErrInvalid)
+	}
+	if keyword.CreatedAt.IsZero() {
+		return fmt.Errorf("%w: keyword created_at must not be zero", ErrInvalid)
+	}
+	if keyword.UpdatedAt.IsZero() {
+		return fmt.Errorf("%w: keyword updated_at must not be zero", ErrInvalid)
+	}
+	return nil
+}
+
 func validateEmbeddingTarget(target EmbeddingTarget) error {
 	if strings.TrimSpace(target.Provider) == "" {
 		return fmt.Errorf("%w: embedding provider must not be empty", ErrInvalid)
@@ -1340,7 +1616,19 @@ func validateEmbeddingTarget(target EmbeddingTarget) error {
 	if target.Dimensions <= 0 {
 		return fmt.Errorf("%w: embedding dimensions must be positive", ErrInvalid)
 	}
+	if !validEmbeddingScope(target.Scope) {
+		return fmt.Errorf("%w: unsupported embedding scope %q", ErrInvalid, target.Scope)
+	}
 	return nil
+}
+
+func validEmbeddingScope(scope string) bool {
+	switch scope {
+	case EmbeddingScopeBody, EmbeddingScopeTitleKeywords:
+		return true
+	default:
+		return false
+	}
 }
 
 func validateVectorMetadata(metadata VectorMetadata) error {
@@ -1348,6 +1636,7 @@ func validateVectorMetadata(metadata VectorMetadata) error {
 		Provider:   metadata.Provider,
 		Model:      metadata.Model,
 		Dimensions: metadata.Dimensions,
+		Scope:      metadata.EmbeddingScope,
 	}); err != nil {
 		return err
 	}
@@ -1382,6 +1671,7 @@ func validateMemoryEmbedding(embedding MemoryEmbedding) error {
 		Provider:   embedding.Provider,
 		Model:      embedding.Model,
 		Dimensions: embedding.Dimensions,
+		Scope:      embedding.EmbeddingScope,
 	}); err != nil {
 		return err
 	}
@@ -1410,6 +1700,38 @@ func validateMemoryEmbedding(embedding MemoryEmbedding) error {
 	return nil
 }
 
+func validateEmbeddingIndexStatus(status EmbeddingIndexStatus) error {
+	if err := requireID("chunk", status.ChunkID); err != nil {
+		return err
+	}
+	if err := requireID("memory", status.MemoryID); err != nil {
+		return err
+	}
+	if err := validateEmbeddingTarget(EmbeddingTarget{
+		Provider:   status.Provider,
+		Model:      status.Model,
+		Dimensions: status.Dimensions,
+		Scope:      status.EmbeddingScope,
+	}); err != nil {
+		return err
+	}
+	switch status.Status {
+	case EmbeddingIndexStatusPending, EmbeddingIndexStatusIndexed, EmbeddingIndexStatusFailed, EmbeddingIndexStatusSkipped:
+	default:
+		return fmt.Errorf("%w: unsupported embedding index status %q", ErrInvalid, status.Status)
+	}
+	if status.Attempts < 0 {
+		return fmt.Errorf("%w: embedding index attempts must not be negative", ErrInvalid)
+	}
+	if status.CreatedAt.IsZero() {
+		return fmt.Errorf("%w: embedding index status created_at must not be zero", ErrInvalid)
+	}
+	if status.UpdatedAt.IsZero() {
+		return fmt.Errorf("%w: embedding index status updated_at must not be zero", ErrInvalid)
+	}
+	return nil
+}
+
 func (r *MemoryRepository) vectorBackend(ctx context.Context, target EmbeddingTarget) (string, error) {
 	if err := validateEmbeddingTarget(target); err != nil {
 		return "", err
@@ -1418,10 +1740,11 @@ func (r *MemoryRepository) vectorBackend(ctx context.Context, target EmbeddingTa
 	err := r.exec.QueryRowContext(ctx, `
 SELECT backend
 FROM vector_metadata
-WHERE provider = ? AND model = ? AND dimensions = ?`,
+WHERE provider = ? AND model = ? AND dimensions = ? AND embedding_scope = ?`,
 		target.Provider,
 		target.Model,
 		target.Dimensions,
+		target.Scope,
 	).Scan(&backend)
 	if errors.Is(err, sql.ErrNoRows) {
 		return VectorBackendSQLiteJSON, nil
@@ -1458,6 +1781,7 @@ func (r *MemoryRepository) upsertSQLiteVecRow(ctx context.Context, embedding Mem
 		Provider:   embedding.Provider,
 		Model:      embedding.Model,
 		Dimensions: embedding.Dimensions,
+		Scope:      embedding.EmbeddingScope,
 	}
 	if err := r.ensureSQLiteVecTable(ctx, target); err != nil {
 		return err
@@ -1479,12 +1803,13 @@ func (r *MemoryRepository) upsertSQLiteVecRow(ctx context.Context, embedding Mem
 
 func (r *MemoryRepository) deleteSQLiteVecRowsForMemory(ctx context.Context, memoryID string) error {
 	rows, err := r.exec.QueryContext(ctx, `
-SELECT memory_embeddings.provider, memory_embeddings.model, memory_embeddings.dimensions,
+SELECT memory_embeddings.provider, memory_embeddings.model, memory_embeddings.dimensions, memory_embeddings.embedding_scope,
        memory_embeddings.vector_rowid, vector_metadata.backend
 FROM memory_embeddings
 JOIN vector_metadata
   ON vector_metadata.provider = memory_embeddings.provider
  AND vector_metadata.model = memory_embeddings.model
+ AND vector_metadata.embedding_scope = memory_embeddings.embedding_scope
 WHERE memory_embeddings.memory_id = ?`, memoryID)
 	if err != nil {
 		return fmt.Errorf("list sqlite-vec rows for memory: %w", err)
@@ -1500,7 +1825,7 @@ WHERE memory_embeddings.memory_id = ?`, memoryID)
 		var target EmbeddingTarget
 		var vectorRowID sql.NullInt64
 		var backend string
-		if err := rows.Scan(&target.Provider, &target.Model, &target.Dimensions, &vectorRowID, &backend); err != nil {
+		if err := rows.Scan(&target.Provider, &target.Model, &target.Dimensions, &target.Scope, &vectorRowID, &backend); err != nil {
 			return fmt.Errorf("scan sqlite-vec row for memory: %w", err)
 		}
 		if backend == VectorBackendSQLiteVec && vectorRowID.Valid {
@@ -1575,8 +1900,8 @@ func l2DistanceSimilarity(distance float64) float64 {
 	return 1 / (1 + distance)
 }
 
-func vectorRowID(chunkID, provider, model string) int64 {
-	sum := sha256.Sum256([]byte(chunkID + "\x00" + provider + "\x00" + model))
+func vectorRowID(chunkID, provider, model, scope string) int64 {
+	sum := sha256.Sum256([]byte(chunkID + "\x00" + provider + "\x00" + model + "\x00" + scope))
 	const maxInt64 = uint64(1<<63 - 1)
 	value := int64(binary.BigEndian.Uint64(sum[:8]) & maxInt64)
 	if value == 0 {
@@ -1586,7 +1911,7 @@ func vectorRowID(chunkID, provider, model string) int64 {
 }
 
 func sqliteVecTableName(target EmbeddingTarget) string {
-	source := target.Provider + "\x00" + target.Model + "\x00" + strconv.Itoa(target.Dimensions)
+	source := target.Provider + "\x00" + target.Model + "\x00" + strconv.Itoa(target.Dimensions) + "\x00" + target.Scope
 	sum := sha256.Sum256([]byte(source))
 	return "memory_vec_" + hexLower(sum[:8])
 }

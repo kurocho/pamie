@@ -51,7 +51,10 @@ func runStartCommand(ctx context.Context, args []string, getenv func(string) str
 	statePaths := daemonStatePaths(cfg.DataDir, getenv)
 
 	if state, path, ok := runningDaemonState(statePaths); ok {
-		fmt.Fprintf(stdout, "Pamie is already running.\npid: %d\naddr: %s\ndata: %s\nlog: %s\nstate: %s\n", state.PID, state.Addr, state.DataDir, state.LogPath, path)
+		if strings.TrimSpace(state.DatabasePath) != "" && filepath.Clean(cfg.DatabasePath) != filepath.Clean(state.DatabasePath) {
+			return fmt.Errorf("pamie is already running with database %s; stop it before starting with %s", state.DatabasePath, cfg.DatabasePath)
+		}
+		fmt.Fprintf(stdout, "Pamie is already running.\npid: %d\naddr: %s\ndata: %s\ndatabase: %s\nlog: %s\nstate: %s\n", state.PID, state.Addr, state.DataDir, state.DatabasePath, state.LogPath, path)
 		return nil
 	}
 	removeDaemonStateFiles(statePaths)

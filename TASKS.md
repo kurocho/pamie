@@ -129,6 +129,9 @@ This checklist tracks implementation work. Keep it updated when a phase is start
 - [x] Add local semantic embedding provider through Ollama.
 - [x] Add sqlite-vec acceleration behind the same storage/ranking contract.
 - [x] Add operator embedding backfill command.
+- [x] Restrict vector embeddings to memory titles and explicit keywords.
+- [x] Add durable keyword storage and embedding index status.
+- [x] Add opt-in local Ollama autostart.
 - [ ] Add model-specific operator guidance and benchmark fixtures.
 
 ## Phase 10 - Code Quality and Package Boundaries

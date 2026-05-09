@@ -21,7 +21,7 @@ Owner of MCP resource definitions.
 - `pamie://guide`
 - `pamie://memory/stats`
 
-`pamie://guide` provides read-only Markdown onboarding guidance for agents and clients. `pamie://memory/stats` requires `stats:read`. `pamie://status` and `pamie://guide` are available to authenticated clients without an additional scope.
+`pamie://guide` provides read-only Markdown onboarding guidance for agents and clients, including the title/keywords-only vector indexing policy and keyword examples for long notes. `pamie://memory/stats` requires `stats:read`. `pamie://status` and `pamie://guide` are available to authenticated clients without an additional scope.
 
 ## Boundary
 

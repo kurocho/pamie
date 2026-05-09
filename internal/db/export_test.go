@@ -112,6 +112,7 @@ func TestExportImportNDJSONRoundTrip(t *testing.T) {
 	if summary.Manifest.Counts != (ExportRecordCounts{
 		MemoryItems:       1,
 		MemoryChunks:      1,
+		MemoryKeywords:    2,
 		MemoryEvents:      1,
 		RetentionPolicies: 1,
 		AccessLogs:        1,
@@ -163,6 +164,13 @@ func TestExportImportNDJSONRoundTrip(t *testing.T) {
 	}
 	if len(chunks) != 1 || chunks[0].ID != "chunk_export" || chunks[0].Content != "Important durable memory" {
 		t.Fatalf("imported chunks = %+v", chunks)
+	}
+	keywords, err := target.Memories().ListKeywords(ctx, "mem_export")
+	if err != nil {
+		t.Fatalf("ListKeywords() after import error = %v", err)
+	}
+	if len(keywords) != 2 || keywords[0].Keyword != "Pamie" || keywords[1].Keyword != "SQLite FTS5" {
+		t.Fatalf("imported keywords = %+v", keywords)
 	}
 
 	events, err := target.Memories().ListEvents(ctx, "mem_export")
@@ -238,6 +246,33 @@ func TestImportNDJSONRejectsDuplicateIDs(t *testing.T) {
 	}
 }
 
+func TestImportNDJSONRejectsDuplicateKeywords(t *testing.T) {
+	now := fixedTime()
+	item := exportMemoryItem{
+		ID:           "mem_keyword_duplicate",
+		Body:         "keyword duplicate body",
+		MetadataJSON: "{}",
+		Tier:         TierWorking,
+		Importance:   10,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	data := exportData{
+		Items: []exportMemoryItem{item},
+		Keywords: []exportMemoryKeyword{
+			{MemoryID: item.ID, KeywordIndex: 0, Keyword: "Alpha", NormalizedKeyword: "alpha", CreatedAt: now, UpdatedAt: now},
+			{MemoryID: item.ID, KeywordIndex: 1, Keyword: "alpha", NormalizedKeyword: "alpha", CreatedAt: now, UpdatedAt: now},
+		},
+	}
+	input := encodeTestExport(t, data)
+
+	target := openTestStore(t)
+	_, err := target.ImportNDJSON(context.Background(), bytes.NewReader(input), ImportOptions{DryRun: true})
+	if err == nil || !strings.Contains(err.Error(), `duplicate normalized memory keyword "alpha"`) {
+		t.Fatalf("ImportNDJSON() error = %v, want duplicate keyword error", err)
+	}
+}
+
 func TestImportNDJSONRejectsTargetDuplicateIDs(t *testing.T) {
 	source := openTestStore(t)
 	seedExportFixture(t, source)
@@ -288,6 +323,12 @@ func seedExportFixture(t *testing.T, store *Store) {
 		CreatedAt:  now,
 	}); err != nil {
 		t.Fatalf("AddChunk() error = %v", err)
+	}
+	if err := store.Memories().ReplaceKeywords(ctx, "mem_export", []MemoryKeyword{
+		{MemoryID: "mem_export", KeywordIndex: 0, Keyword: "Pamie", NormalizedKeyword: "pamie", CreatedAt: now, UpdatedAt: now},
+		{MemoryID: "mem_export", KeywordIndex: 1, Keyword: "SQLite FTS5", NormalizedKeyword: "sqlite fts5", CreatedAt: now, UpdatedAt: now},
+	}); err != nil {
+		t.Fatalf("ReplaceKeywords() error = %v", err)
 	}
 	if _, err := store.Memories().RecordEvent(ctx, MemoryEvent{
 		MemoryID:         "mem_export",

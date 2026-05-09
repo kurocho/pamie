@@ -282,9 +282,15 @@ func TestServiceEmbeddingStorageUpdateAndBackfill(t *testing.T) {
 		Provider:   provider.Name(),
 		Model:      provider.Model(),
 		Dimensions: provider.Dimensions(),
+		Scope:      db.EmbeddingScopeTitleKeywords,
 	}
 
-	saved, err := service.Save(ctx, SaveInput{Body: "alpha vector memory", Metadata: map[string]any{"project": "pamie"}})
+	saved, err := service.Save(ctx, SaveInput{
+		Title:    "Alpha vector memory",
+		Keywords: []string{"semantic-alias"},
+		Body:     "alpha vector memory",
+		Metadata: map[string]any{"project": "pamie"},
+	})
 	if err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
@@ -292,7 +298,7 @@ func TestServiceEmbeddingStorageUpdateAndBackfill(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListEmbeddings() error = %v", err)
 	}
-	if len(embeddings) != 1 || embeddings[0].Dimensions != provider.Dimensions() {
+	if len(embeddings) != 1 || embeddings[0].Dimensions != provider.Dimensions() || embeddings[0].EmbeddingScope != db.EmbeddingScopeTitleKeywords {
 		t.Fatalf("embeddings after Save() = %+v, want one local hash embedding", embeddings)
 	}
 	firstHash := embeddings[0].ContentHash
@@ -305,13 +311,14 @@ func TestServiceEmbeddingStorageUpdateAndBackfill(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListEmbeddings() after update error = %v", err)
 	}
-	if len(embeddings) != 1 || embeddings[0].ContentHash == firstHash {
-		t.Fatalf("embeddings after Update() = %+v, want replaced embedding", embeddings)
+	if len(embeddings) != 1 || embeddings[0].ContentHash != firstHash {
+		t.Fatalf("embeddings after body-only Update() = %+v, want title/keywords hash unchanged", embeddings)
 	}
 
 	now := time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC)
 	if err := store.Memories().CreateItem(ctx, db.MemoryItem{
 		ID:         "mem_legacy",
+		Title:      "Legacy vector memory",
 		Body:       "legacy memory before vectors",
 		Tier:       db.TierWorking,
 		Importance: 10,
@@ -352,12 +359,108 @@ func TestServiceEmbeddingStorageUpdateAndBackfill(t *testing.T) {
 		t.Fatalf("ReindexEmbeddings() = %+v, want two reindexed chunks", reindexed)
 	}
 
-	hits, err := service.Search(ctx, SearchInput{Query: "beta", Metadata: map[string]any{"project": "pamie"}, Limit: 5})
+	hits, err := service.Search(ctx, SearchInput{Query: "semantic-alias", Metadata: map[string]any{"project": "pamie"}, Limit: 5})
 	if err != nil {
 		t.Fatalf("Search() with vector enabled error = %v", err)
 	}
 	if len(hits) == 0 || hits[0].ScoreDetails.Vector == 0 {
 		t.Fatalf("Search() hits = %+v, want vector score component", hits)
+	}
+}
+
+func TestServiceKeywordsNormalizeAndPersist(t *testing.T) {
+	service, closeStore := testService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	saved, err := service.Save(ctx, SaveInput{
+		Title:    "Keyword memory",
+		Body:     "body with exact text",
+		Keywords: []string{" Alpha ", "alpha", "Beta"},
+	})
+	if err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if got := strings.Join(saved.Keywords, ","); got != "Alpha,Beta" {
+		t.Fatalf("saved keywords = %q, want normalized display keywords", got)
+	}
+	fetched, err := service.Get(ctx, saved.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got := strings.Join(fetched.Memory.Keywords, ","); got != "Alpha,Beta" {
+		t.Fatalf("fetched keywords = %q, want persisted keywords", got)
+	}
+	badKeyword := []string{"bad\nkeyword"}
+	if _, err := service.Save(ctx, SaveInput{Body: "bad keywords", Keywords: badKeyword}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Save() bad keyword error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestServiceEmbedsOnlyTitleAndKeywords(t *testing.T) {
+	provider := &recordingProvider{vector: []float64{1, 0}}
+	service, _, closeStore := testServiceWithOptions(t, Options{
+		EmbeddingProvider:   provider,
+		VectorSearchEnabled: true,
+	})
+	defer closeStore()
+	ctx := context.Background()
+
+	saved, err := service.Save(ctx, SaveInput{
+		Title:    "Vector policy",
+		Keywords: []string{"semantic-key"},
+		Body:     "NEVER_EMBED_BODY exact body text",
+	})
+	if err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	newBody := "NEVER_EMBED_BODY updated body text"
+	if _, err := service.Update(ctx, UpdateInput{ID: saved.ID, Body: &newBody}); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if len(provider.inputs) != 2 {
+		t.Fatalf("provider inputs = %d, want save and update embeddings: %#v", len(provider.inputs), provider.inputs)
+	}
+	for _, input := range provider.inputs {
+		if strings.Contains(input, "NEVER_EMBED_BODY") {
+			t.Fatalf("embedding input included body text: %q", input)
+		}
+		if !strings.Contains(input, "Vector policy") || !strings.Contains(input, "semantic-key") {
+			t.Fatalf("embedding input = %q, want title and keyword", input)
+		}
+	}
+}
+
+func TestServiceEmbeddingFailuresDegradeToFTS(t *testing.T) {
+	provider := &recordingProvider{err: errors.New("embedding unavailable")}
+	service, _, closeStore := testServiceWithOptions(t, Options{
+		EmbeddingProvider:   provider,
+		VectorSearchEnabled: true,
+	})
+	defer closeStore()
+	ctx := context.Background()
+
+	saved, err := service.Save(ctx, SaveInput{
+		Title:    "Large body",
+		Keywords: []string{"semantic-only"},
+		Body:     strings.Repeat("hugebody ", 2000) + "exact-body-token",
+	})
+	if err != nil {
+		t.Fatalf("Save() with failing embedder error = %v", err)
+	}
+	hits, err := service.Search(ctx, SearchInput{Query: "exact-body-token", Limit: 5})
+	if err != nil {
+		t.Fatalf("Search() with failing query embedder error = %v", err)
+	}
+	if len(hits) != 1 || hits[0].MemoryID != saved.ID || !hits[0].KeywordMatch {
+		t.Fatalf("Search() hits = %+v, want FTS fallback hit", hits)
+	}
+
+	newTitle := "Updated large body"
+	if _, err := service.Update(ctx, UpdateInput{ID: saved.ID, Title: &newTitle}); err != nil {
+		t.Fatalf("Update() with failing embedder error = %v", err)
 	}
 }
 
@@ -431,6 +534,41 @@ func TestServiceBulkSaveAndSearch(t *testing.T) {
 			t.Fatalf("Search(%q) top hit score = %+v, want vector score", fixture.query, hits[0].ScoreDetails)
 		}
 	}
+}
+
+type recordingProvider struct {
+	mu     sync.Mutex
+	inputs []string
+	vector []float64
+	err    error
+}
+
+func (p *recordingProvider) Name() string {
+	return "recording"
+}
+
+func (p *recordingProvider) Model() string {
+	return "recording-v1"
+}
+
+func (p *recordingProvider) Dimensions() int {
+	if len(p.vector) == 0 {
+		return 2
+	}
+	return len(p.vector)
+}
+
+func (p *recordingProvider) Embed(_ context.Context, text string) ([]float64, error) {
+	p.mu.Lock()
+	p.inputs = append(p.inputs, text)
+	p.mu.Unlock()
+	if p.err != nil {
+		return nil, p.err
+	}
+	if len(p.vector) == 0 {
+		return []float64{1, 0}, nil
+	}
+	return append([]float64(nil), p.vector...), nil
 }
 
 func TestServiceValidation(t *testing.T) {

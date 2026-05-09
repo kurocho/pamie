@@ -26,7 +26,7 @@ The current backend has predictable tradeoffs:
 
 ## Runtime Configuration
 
-Vector search is disabled by default. Enable it with:
+Vector search is enabled by default with the dependency-free `local-hash` provider. Switch to Ollama semantic embeddings with:
 
 ```sh
 PAMIE_VECTOR_SEARCH_ENABLED=true
@@ -34,19 +34,22 @@ PAMIE_VECTOR_BACKEND=auto
 PAMIE_VECTOR_PROVIDER=ollama
 PAMIE_VECTOR_MODEL=embeddinggemma
 PAMIE_VECTOR_DIMENSIONS=384
+PAMIE_VECTOR_EMBEDDING_SCOPE=title_keywords
 PAMIE_VECTOR_OLLAMA_URL=http://127.0.0.1:11434
 ```
 
 Equivalent flags are:
 
 ```sh
---vector-search=true --vector-backend auto --vector-provider ollama --vector-model embeddinggemma --vector-dimensions 384
+--vector-provider ollama
 ```
 
 Built-in providers:
 
 - `local-hash`: dependency-free deterministic baseline and test provider.
 - `ollama`: local semantic provider that calls a locally running Ollama `/api/embed` endpoint.
+
+Ollama autostart is opt-in with `PAMIE_VECTOR_OLLAMA_AUTOSTART=true` / `--vector-ollama-autostart`. Pamie first checks the configured Ollama URL, starts `ollama serve` only when requested, and only stops the process it started. Pamie does not auto-pull models.
 
 ## Storage
 
@@ -57,7 +60,9 @@ Migration `0002_vector_search_storage.sql` adds:
 
 Migration `0003_vector_rowids.sql` adds stable integer row IDs used to mirror embedding rows into sqlite-vec `vec0` virtual tables.
 
-Embeddings are tied to `memory_chunks` and cascade on chunk deletion, so memory body updates replace stale chunk embeddings.
+Migration `0005_memory_keywords_and_embedding_scope.sql` adds first-class memory keywords, embedding scope columns, and durable embedding index status.
+
+Embeddings are tied to `memory_chunks` and cascade on chunk deletion, so body updates recreate the title/keywords embedding against the replacement chunk. Existing body-scope embeddings are ignored by title/keywords vector search and should be replaced with `pamie embeddings backfill --reindex`.
 
 ## Interfaces
 
@@ -76,9 +81,17 @@ type Provider interface {
 
 ## Indexing and Backfill
 
-When vector search is enabled, `context_save` embeds the new memory chunk inside the same storage transaction as the memory write. `context_update` replaces chunks and embeddings when the body changes.
+When vector search is enabled, `context_save` and `context_update` persist the memory first, then best-effort index a deterministic document built only from the title and explicit keywords:
 
-Backfill is resumable through `memory.Service.BackfillEmbeddings`: it lists active chunks missing an embedding for the configured provider/model, indexes a bounded batch, and can be run repeatedly. Completed chunks are skipped by the unique `chunk_id`, provider, and model embedding row.
+```text
+Title: <title>
+Keywords:
+- <keyword>
+```
+
+The full body remains the FTS5 source and is never sent to embedding providers. If the title and keyword list are empty, Pamie records the index as skipped. If the provider fails, the memory operation still succeeds and Pamie records a failed indexing status.
+
+Backfill is resumable through `memory.Service.BackfillEmbeddings`: it lists active chunks missing a title/keywords embedding for the configured provider/model/scope, retries failed status rows, indexes a bounded batch, and reports scanned, indexed, failed, and skipped counts. Completed chunks are skipped by the unique `chunk_id`, provider, and model embedding row.
 
 Operators can run backfill from the CLI:
 
@@ -91,19 +104,21 @@ For Ollama-backed semantic embeddings, run Ollama locally and pull the default e
 ```sh
 ollama serve
 ollama pull embeddinggemma
-pamie start --vector-search --vector-provider ollama --vector-model embeddinggemma --vector-dimensions 384
-pamie embeddings backfill --provider ollama --model embeddinggemma --dimensions 384 --backend auto --limit 500
+pamie start --vector-provider ollama
+pamie embeddings backfill --provider ollama --limit 500
 ```
 
 Use `--reindex` after changing provider, model, dimensions, or backend:
 
 ```sh
-pamie embeddings backfill --provider ollama --model embeddinggemma --dimensions 384 --backend sqlite-vec --reindex
+pamie embeddings backfill --provider ollama --model embeddinggemma --dimensions 384 --backend sqlite-vec --embedding-scope title_keywords --reindex
 ```
 
 ## Hybrid Ranking
 
 Search still requires safe keyword query text and always applies metadata, source, tier, pinned, timestamp, and deletion filters. When vector search is enabled, the repository also evaluates filtered vector candidates and merges them with FTS candidates by memory ID.
+
+Agents saving long notes should provide high-quality keywords. Useful meeting-note keywords include people names, team names, project names, organizations, aliases, technologies, decisions, ticket IDs, dates, error messages, customer or vendor names, and domain-specific terms. Missing or poor keywords reduce semantic recall but do not reduce exact body search through FTS5.
 
 The explainable score is now:
 

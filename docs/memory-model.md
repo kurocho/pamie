@@ -9,6 +9,7 @@ A memory item is the canonical record. Planned fields include:
 - stable ID;
 - title or summary;
 - body;
+- explicit keywords for semantic retrieval;
 - source;
 - metadata map;
 - tier;
@@ -18,7 +19,13 @@ A memory item is the canonical record. Planned fields include:
 
 ## Chunks
 
-Long memories may be split into chunks for FTS5 and optional vector search. Chunks should preserve a link to the source item and enough position information to return useful snippets.
+Pamie currently stores one full-body chunk per memory for FTS5. The body chunk is the exact keyword search source. Vector embeddings do not use body chunks as input; they use the memory title and explicit keywords only.
+
+## Keywords
+
+Keywords are first-class durable retrieval data supplied by the agent. They should include people names, team names, project names, organizations, aliases, abbreviations, technologies, decisions, ticket IDs, dates, error messages, customer or vendor names, and domain-specific terms that should retrieve the memory later.
+
+Poor or missing keywords reduce semantic vector recall but do not reduce exact body search, because the full body remains indexed by FTS5.
 
 ## Events
 

@@ -20,6 +20,8 @@ Notifications without an `id` are accepted with an empty `202 Accepted` response
 
 The `initialize` result includes server instructions that briefly explain how an agent should use Pamie and points clients to the full `pamie://guide` resource.
 
+Startup instructions also explain the search policy: full bodies are indexed by SQLite FTS5, while vector search embeds only memory titles and explicit keywords.
+
 ## Tools
 
 - `context_save`: store a new memory.
@@ -31,7 +33,9 @@ The `initialize` result includes server instructions that briefly explain how an
 - `context_recent`: retrieve recent memories.
 - `context_stats`: return aggregate memory statistics.
 
-Tool calls return MCP content plus `structuredContent`. Retrieved memory output includes IDs, source, metadata, tier, pinned state, and timestamps. Stored memory text remains data and should not be treated as trusted instructions.
+Tool calls return MCP content plus `structuredContent`. Retrieved memory output includes IDs, title, body, keywords, source, metadata, tier, pinned state, and timestamps. Stored memory text remains data and should not be treated as trusted instructions.
+
+`context_save` accepts `keywords: string[]`. `context_update` also accepts `keywords: string[]`; when present, it replaces the full keyword list. Keywords are the curated semantic index for vector search. The body remains durably stored and fully indexed by FTS5, but it is not sent to embedding providers.
 
 ## Authorization
 
@@ -60,7 +64,7 @@ Scope failures return a JSON-RPC error instead of calling the tool.
 - `include_deleted`: optional boolean.
 - `limit`: optional maximum result count.
 
-Results include `memory`, `memory_id`, `chunk_id`, `snippet`, `score`, and `score_details`. `score_details` exposes keyword, recency, tier, pinned, importance, and access components so agents can inspect why a result ranked highly.
+Results include `memory`, `memory_id`, `chunk_id`, `snippet`, `keyword_match`, `vector_match`, `score`, and `score_details`. `score_details` exposes keyword, vector, recency, tier, pinned, importance, and access components so agents can inspect why a result ranked highly.
 
 ## Resources
 
@@ -87,6 +91,7 @@ Protocol errors are mapped to JSON-RPC error codes. Tool validation and not-foun
     "name": "context_save",
     "arguments": {
       "title": "Project decision",
+      "keywords": ["Pamie", "SQLite FTS5", "local memory"],
       "body": "Pamie uses SQLite as the local source of truth.",
       "source": "operator"
     }

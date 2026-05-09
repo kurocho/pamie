@@ -76,6 +76,7 @@ func TestMCPAcceptanceMemoryToolFlow(t *testing.T) {
 	save := callTool(t, client, server.URL, "context_save", map[string]any{
 		"title":      "Acceptance memory",
 		"body":       "alpha acceptance memory covers MCP tool flows",
+		"keywords":   []string{"acceptance", "MCP tool flow"},
 		"source":     "acceptance",
 		"metadata":   map[string]any{"project": "pamie", "stage": "acceptance", "priority": 10},
 		"tier":       "working",
@@ -86,6 +87,9 @@ func TestMCPAcceptanceMemoryToolFlow(t *testing.T) {
 	memoryID, ok := saved["id"].(string)
 	if !ok || memoryID == "" {
 		t.Fatalf("context_save memory = %+v, want id", saved)
+	}
+	if keywords := asSlice(t, saved["keywords"]); len(keywords) != 2 || keywords[0] != "acceptance" {
+		t.Fatalf("context_save keywords = %+v, want saved keywords", keywords)
 	}
 
 	get := callTool(t, client, server.URL, "context_get", map[string]any{"id": memoryID})
@@ -113,6 +117,7 @@ func TestMCPAcceptanceMemoryToolFlow(t *testing.T) {
 	update := callTool(t, client, server.URL, "context_update", map[string]any{
 		"id":         memoryID,
 		"body":       "beta acceptance memory verifies update replacement",
+		"keywords":   []string{"updated acceptance"},
 		"metadata":   map[string]any{"project": "pamie", "stage": "updated"},
 		"tier":       "hot",
 		"importance": 77,
@@ -120,6 +125,9 @@ func TestMCPAcceptanceMemoryToolFlow(t *testing.T) {
 	updated := asMap(t, structured(t, update)["memory"])
 	if updated["body"] != "beta acceptance memory verifies update replacement" || updated["tier"] != "hot" {
 		t.Fatalf("context_update memory = %+v, want updated body and hot tier", updated)
+	}
+	if keywords := asSlice(t, updated["keywords"]); len(keywords) != 1 || keywords[0] != "updated acceptance" {
+		t.Fatalf("context_update keywords = %+v, want replacement keywords", keywords)
 	}
 
 	unpin := callTool(t, client, server.URL, "context_pin", map[string]any{"id": memoryID, "pinned": false})

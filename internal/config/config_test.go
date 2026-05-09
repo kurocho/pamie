@@ -60,8 +60,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.LifecycleStartupDelay != 0 {
 		t.Fatalf("LifecycleStartupDelay = %v, want 0", cfg.LifecycleStartupDelay)
 	}
-	if cfg.VectorSearchEnabled {
-		t.Fatal("VectorSearchEnabled = true, want false")
+	if !cfg.VectorSearchEnabled {
+		t.Fatal("VectorSearchEnabled = false, want true")
 	}
 	if cfg.VectorBackend != defaultVectorBackend {
 		t.Fatalf("VectorBackend = %q, want %q", cfg.VectorBackend, defaultVectorBackend)
@@ -75,36 +75,52 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.VectorDimensions != defaultVectorDimensions {
 		t.Fatalf("VectorDimensions = %d, want %d", cfg.VectorDimensions, defaultVectorDimensions)
 	}
+	if cfg.VectorEmbeddingScope != defaultVectorEmbeddingScope {
+		t.Fatalf("VectorEmbeddingScope = %q, want %q", cfg.VectorEmbeddingScope, defaultVectorEmbeddingScope)
+	}
 	if cfg.VectorOllamaURL != defaultVectorOllamaURL {
 		t.Fatalf("VectorOllamaURL = %q, want %q", cfg.VectorOllamaURL, defaultVectorOllamaURL)
+	}
+	if cfg.VectorOllamaAutostart {
+		t.Fatal("VectorOllamaAutostart = true, want false")
+	}
+	if cfg.VectorOllamaCommand != defaultVectorOllamaCommand {
+		t.Fatalf("VectorOllamaCommand = %q, want %q", cfg.VectorOllamaCommand, defaultVectorOllamaCommand)
+	}
+	if cfg.VectorOllamaStartupTimeout != defaultVectorOllamaStartupTimeout {
+		t.Fatalf("VectorOllamaStartupTimeout = %v, want %v", cfg.VectorOllamaStartupTimeout, defaultVectorOllamaStartupTimeout)
 	}
 }
 
 func TestLoadEnvironmentAndFlagPrecedence(t *testing.T) {
 	env := map[string]string{
-		EnvAddr:                  "127.0.0.1:9000",
-		EnvToken:                 "env-token",
-		EnvTokenID:               "env-token-id",
-		EnvTokenScopes:           "memory:read",
-		EnvDataDir:               "/tmp/env-data",
-		EnvDatabasePath:          "/tmp/env.db",
-		EnvLogLevel:              "warn",
-		EnvReadHeaderTimeout:     "2s",
-		EnvShutdownTimeout:       "3s",
-		EnvMCPRateLimit:          "80",
-		EnvMCPRateBurst:          "8",
-		EnvLifecycleEnabled:      "false",
-		EnvLifecycleInterval:     "45m",
-		EnvLifecycleBatchSize:    "100",
-		EnvLifecycleRunOnStart:   "false",
-		EnvLifecycleStartupDelay: "2s",
-		EnvVectorSearchEnabled:   "false",
-		EnvVectorBackend:         "sqlite-json",
-		EnvVectorProvider:        "local-hash",
-		EnvVectorModel:           "env-model",
-		EnvVectorDimensions:      "128",
-		EnvVectorOllamaURL:       "http://127.0.0.1:11435",
-		EnvVectorOllamaKeepAlive: "1h",
+		EnvAddr:                       "127.0.0.1:9000",
+		EnvToken:                      "env-token",
+		EnvTokenID:                    "env-token-id",
+		EnvTokenScopes:                "memory:read",
+		EnvDataDir:                    "/tmp/env-data",
+		EnvDatabasePath:               "/tmp/env.db",
+		EnvLogLevel:                   "warn",
+		EnvReadHeaderTimeout:          "2s",
+		EnvShutdownTimeout:            "3s",
+		EnvMCPRateLimit:               "80",
+		EnvMCPRateBurst:               "8",
+		EnvLifecycleEnabled:           "false",
+		EnvLifecycleInterval:          "45m",
+		EnvLifecycleBatchSize:         "100",
+		EnvLifecycleRunOnStart:        "false",
+		EnvLifecycleStartupDelay:      "2s",
+		EnvVectorSearchEnabled:        "false",
+		EnvVectorBackend:              "sqlite-json",
+		EnvVectorProvider:             "local-hash",
+		EnvVectorModel:                "env-model",
+		EnvVectorDimensions:           "128",
+		EnvVectorEmbeddingScope:       "title_keywords",
+		EnvVectorOllamaURL:            "http://127.0.0.1:11435",
+		EnvVectorOllamaKeepAlive:      "1h",
+		EnvVectorOllamaAutostart:      "false",
+		EnvVectorOllamaCommand:        "env-ollama",
+		EnvVectorOllamaStartupTimeout: "7s",
 	}
 
 	cfg, err := Load([]string{
@@ -129,8 +145,12 @@ func TestLoadEnvironmentAndFlagPrecedence(t *testing.T) {
 		"--vector-provider", "ollama",
 		"--vector-model", "flag-model",
 		"--vector-dimensions", "256",
+		"--vector-embedding-scope", "title_keywords",
 		"--vector-ollama-url", "http://127.0.0.1:11436",
 		"--vector-ollama-keep-alive", "2h",
+		"--vector-ollama-autostart=true",
+		"--vector-ollama-command", "flag-ollama",
+		"--vector-ollama-startup-timeout", "8s",
 	}, func(key string) string {
 		return env[key]
 	}, io.Discard)
@@ -201,11 +221,23 @@ func TestLoadEnvironmentAndFlagPrecedence(t *testing.T) {
 	if cfg.VectorDimensions != 256 {
 		t.Fatalf("VectorDimensions = %d", cfg.VectorDimensions)
 	}
+	if cfg.VectorEmbeddingScope != "title_keywords" {
+		t.Fatalf("VectorEmbeddingScope = %q", cfg.VectorEmbeddingScope)
+	}
 	if cfg.VectorOllamaURL != "http://127.0.0.1:11436" {
 		t.Fatalf("VectorOllamaURL = %q", cfg.VectorOllamaURL)
 	}
 	if cfg.VectorOllamaKeepAlive != "2h" {
 		t.Fatalf("VectorOllamaKeepAlive = %q", cfg.VectorOllamaKeepAlive)
+	}
+	if !cfg.VectorOllamaAutostart {
+		t.Fatal("VectorOllamaAutostart = false")
+	}
+	if cfg.VectorOllamaCommand != "flag-ollama" {
+		t.Fatalf("VectorOllamaCommand = %q", cfg.VectorOllamaCommand)
+	}
+	if cfg.VectorOllamaStartupTimeout != 8*time.Second {
+		t.Fatalf("VectorOllamaStartupTimeout = %v", cfg.VectorOllamaStartupTimeout)
 	}
 }
 
@@ -260,8 +292,11 @@ func TestValidateRejectsInvalidValues(t *testing.T) {
 		{name: "empty vector provider", cfg: validConfig(func(cfg *Config) { cfg.VectorProvider = "" })},
 		{name: "unsupported vector provider", cfg: validConfig(func(cfg *Config) { cfg.VectorProvider = "hosted" })},
 		{name: "bad vector dimensions", cfg: validConfig(func(cfg *Config) { cfg.VectorDimensions = 0 })},
+		{name: "unsupported vector embedding scope", cfg: validConfig(func(cfg *Config) { cfg.VectorEmbeddingScope = "body" })},
 		{name: "empty ollama model", cfg: validConfig(func(cfg *Config) { cfg.VectorProvider = "ollama"; cfg.VectorModel = "" })},
 		{name: "empty ollama url", cfg: validConfig(func(cfg *Config) { cfg.VectorProvider = "ollama"; cfg.VectorOllamaURL = "" })},
+		{name: "empty ollama autostart command", cfg: validConfig(func(cfg *Config) { cfg.VectorOllamaAutostart = true; cfg.VectorOllamaCommand = "" })},
+		{name: "bad ollama startup timeout", cfg: validConfig(func(cfg *Config) { cfg.VectorOllamaStartupTimeout = 0 })},
 	}
 
 	for _, tt := range tests {

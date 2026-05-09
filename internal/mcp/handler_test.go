@@ -45,12 +45,15 @@ func TestToolListAndBasicSaveGetSearchFlow(t *testing.T) {
 	if len(toolsValue) != 8 {
 		t.Fatalf("tools/list returned %d tools, want 8", len(toolsValue))
 	}
+	assertToolHasProperty(t, toolsValue, "context_save", "keywords")
+	assertToolHasProperty(t, toolsValue, "context_update", "keywords")
 
 	save := rpc(t, handler, "tools/call", map[string]any{
 		"name": "context_save",
 		"arguments": map[string]any{
 			"title":      "Storage note",
 			"body":       "SQLite backs Pamie memory",
+			"keywords":   []string{"Pamie", "SQLite FTS5"},
 			"source":     "test",
 			"metadata":   map[string]any{"project": "pamie", "priority": 3},
 			"importance": 50,
@@ -60,6 +63,10 @@ func TestToolListAndBasicSaveGetSearchFlow(t *testing.T) {
 	memoryID := save["structuredContent"].(map[string]any)["memory"].(map[string]any)["id"].(string)
 	if memoryID == "" {
 		t.Fatal("context_save returned empty memory id")
+	}
+	keywords := save["structuredContent"].(map[string]any)["memory"].(map[string]any)["keywords"].([]any)
+	if len(keywords) != 2 || keywords[0] != "Pamie" {
+		t.Fatalf("context_save keywords = %+v, want saved keywords", keywords)
 	}
 
 	get := rpc(t, handler, "tools/call", map[string]any{
@@ -107,8 +114,10 @@ func TestInitializeIncludesUsageInstructions(t *testing.T) {
 	if !ok || instructions == "" {
 		t.Fatalf("initialize instructions = %#v, want non-empty string", result["instructions"])
 	}
-	if !bytes.Contains([]byte(instructions), []byte("pamie://guide")) {
-		t.Fatalf("initialize instructions = %q, want guide resource mention", instructions)
+	for _, want := range []string{"pamie://guide", "memory titles and explicit keywords", "body is still fully indexed by FTS5"} {
+		if !bytes.Contains([]byte(instructions), []byte(want)) {
+			t.Fatalf("initialize instructions = %q, want %q", instructions, want)
+		}
 	}
 }
 
@@ -162,8 +171,10 @@ func TestResourcesListAndRead(t *testing.T) {
 		t.Fatalf("guide contents = %+v", guideContents)
 	}
 	guideText := guideContents[0].(map[string]any)["text"].(string)
-	if !bytes.Contains([]byte(guideText), []byte("Recommended Agent Workflow")) {
-		t.Fatalf("guide text = %q, want workflow guidance", guideText)
+	for _, want := range []string{"Recommended Agent Workflow", "Keywords And Search", "embeds only the memory title and explicit keywords"} {
+		if !bytes.Contains([]byte(guideText), []byte(want)) {
+			t.Fatalf("guide text = %q, want %q", guideText, want)
+		}
 	}
 
 	read := rpc(t, handler, "resources/read", map[string]any{"uri": resources.StatsURI})
@@ -171,6 +182,23 @@ func TestResourcesListAndRead(t *testing.T) {
 	if len(contents) != 1 {
 		t.Fatalf("resources/read contents = %+v", contents)
 	}
+}
+
+func assertToolHasProperty(t *testing.T, toolsValue []any, toolName, property string) {
+	t.Helper()
+	for _, toolValue := range toolsValue {
+		toolMap := toolValue.(map[string]any)
+		if toolMap["name"] != toolName {
+			continue
+		}
+		schema := toolMap["inputSchema"].(map[string]any)
+		properties := schema["properties"].(map[string]any)
+		if _, ok := properties[property]; !ok {
+			t.Fatalf("%s schema properties = %+v, want %q", toolName, properties, property)
+		}
+		return
+	}
+	t.Fatalf("tool %q not found in %+v", toolName, toolsValue)
 }
 
 func TestToolScopeEnforcement(t *testing.T) {

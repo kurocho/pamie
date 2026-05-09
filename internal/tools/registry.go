@@ -57,10 +57,11 @@ type CallResult struct {
 
 func (r *Registry) List() []Tool {
 	return []Tool{
-		{Name: "context_save", Description: "Store a new durable memory.", InputSchema: schema(
+		{Name: "context_save", Description: "Store a new durable memory. The full body is indexed by FTS5; vector search embeds only the title and explicit keywords.", InputSchema: schema(
 			map[string]any{
 				"title":      stringProp("Short optional title."),
 				"body":       stringProp("Memory body to store."),
+				"keywords":   stringArrayProp("Explicit semantic retrieval keywords for title/keywords vector indexing. Include people names, teams, projects, aliases, technologies, decisions, ticket IDs, dates, error messages, and domain-specific terms that may not appear in the title."),
 				"source":     stringProp("Optional source or agent name."),
 				"metadata":   objectProp("Optional JSON metadata object."),
 				"tier":       enumProp("Initial memory tier.", []string{"working", "hot", "warm", "cold", "archive"}),
@@ -90,11 +91,12 @@ func (r *Registry) List() []Tool {
 			},
 			[]string{"query"},
 		)},
-		{Name: "context_update", Description: "Update mutable memory fields.", InputSchema: schema(
+		{Name: "context_update", Description: "Update mutable memory fields. Providing keywords replaces the full keyword list used for title/keywords vector indexing.", InputSchema: schema(
 			map[string]any{
 				"id":         stringProp("Memory ID."),
 				"title":      stringProp("New title."),
 				"body":       stringProp("New body."),
+				"keywords":   stringArrayProp("Replacement semantic retrieval keywords. The full body remains searchable through FTS5; embeddings use only title and keywords."),
 				"source":     stringProp("New source."),
 				"metadata":   objectProp("Replacement metadata object."),
 				"tier":       enumProp("New memory tier.", []string{"working", "hot", "warm", "cold", "archive"}),
@@ -179,6 +181,7 @@ func (r *Registry) contextSave(ctx context.Context, raw json.RawMessage) CallRes
 	memoryItem, err := r.memory.Save(ctx, memory.SaveInput{
 		Title:      args.Title,
 		Body:       args.Body,
+		Keywords:   args.Keywords,
 		Source:     args.Source,
 		Metadata:   args.Metadata,
 		Tier:       args.Tier,
@@ -256,6 +259,7 @@ func (r *Registry) contextUpdate(ctx context.Context, raw json.RawMessage) CallR
 		ID:         args.ID,
 		Title:      args.Title,
 		Body:       args.Body,
+		Keywords:   args.Keywords,
 		Source:     args.Source,
 		Metadata:   args.Metadata,
 		Tier:       args.Tier,
@@ -323,6 +327,7 @@ func (r *Registry) contextStats(ctx context.Context, raw json.RawMessage) CallRe
 type saveArgs struct {
 	Title      string         `json:"title"`
 	Body       string         `json:"body"`
+	Keywords   []string       `json:"keywords"`
 	Source     string         `json:"source"`
 	Metadata   map[string]any `json:"metadata"`
 	Tier       string         `json:"tier"`
@@ -353,6 +358,7 @@ type updateArgs struct {
 	ID         string          `json:"id"`
 	Title      *string         `json:"title"`
 	Body       *string         `json:"body"`
+	Keywords   *[]string       `json:"keywords"`
 	Source     *string         `json:"source"`
 	Metadata   *map[string]any `json:"metadata"`
 	Tier       *string         `json:"tier"`
@@ -361,7 +367,7 @@ type updateArgs struct {
 }
 
 func (a updateArgs) hasUpdate() bool {
-	return a.Title != nil || a.Body != nil || a.Source != nil || a.Metadata != nil || a.Tier != nil || a.Importance != nil || a.Pinned != nil
+	return a.Title != nil || a.Body != nil || a.Keywords != nil || a.Source != nil || a.Metadata != nil || a.Tier != nil || a.Importance != nil || a.Pinned != nil
 }
 
 type deleteArgs struct {
@@ -439,6 +445,10 @@ func boolProp(description string) map[string]any {
 
 func objectProp(description string) map[string]any {
 	return map[string]any{"type": "object", "description": description, "additionalProperties": true}
+}
+
+func stringArrayProp(description string) map[string]any {
+	return map[string]any{"type": "array", "description": description, "items": map[string]any{"type": "string"}}
 }
 
 func integerProp(description string, min int, max int) map[string]any {

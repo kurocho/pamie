@@ -14,96 +14,111 @@ import (
 )
 
 const (
-	EnvAddr                   = "PAMIE_ADDR"
-	EnvToken                  = "PAMIE_TOKEN"
-	EnvTokenID                = "PAMIE_TOKEN_ID"
-	EnvTokenScopes            = "PAMIE_TOKEN_SCOPES"
-	EnvDataDir                = "PAMIE_DATA_DIR"
-	EnvDatabasePath           = "PAMIE_DB_PATH"
-	EnvLogLevel               = "PAMIE_LOG_LEVEL"
-	EnvReadHeaderTimeout      = "PAMIE_READ_HEADER_TIMEOUT"
-	EnvShutdownTimeout        = "PAMIE_SHUTDOWN_TIMEOUT"
-	EnvMCPRateLimit           = "PAMIE_MCP_RATE_LIMIT"
-	EnvMCPRateBurst           = "PAMIE_MCP_RATE_BURST"
-	EnvLifecycleEnabled       = "PAMIE_LIFECYCLE_WORKER_ENABLED"
-	EnvLifecycleInterval      = "PAMIE_LIFECYCLE_INTERVAL"
-	EnvLifecycleBatchSize     = "PAMIE_LIFECYCLE_BATCH_SIZE"
-	EnvLifecycleRunOnStart    = "PAMIE_LIFECYCLE_RUN_ON_START"
-	EnvLifecycleStartupDelay  = "PAMIE_LIFECYCLE_STARTUP_DELAY"
-	EnvVectorSearchEnabled    = "PAMIE_VECTOR_SEARCH_ENABLED"
-	EnvVectorBackend          = "PAMIE_VECTOR_BACKEND"
-	EnvVectorProvider         = "PAMIE_VECTOR_PROVIDER"
-	EnvVectorModel            = "PAMIE_VECTOR_MODEL"
-	EnvVectorDimensions       = "PAMIE_VECTOR_DIMENSIONS"
-	EnvVectorOllamaURL        = "PAMIE_VECTOR_OLLAMA_URL"
-	EnvVectorOllamaKeepAlive  = "PAMIE_VECTOR_OLLAMA_KEEP_ALIVE"
-	defaultAddr               = "127.0.0.1:17683"
-	defaultTokenID            = "default"
-	defaultTokenScopes        = "all"
-	defaultDataDir            = "data"
-	defaultDatabaseName       = "pamie.db"
-	defaultLogLevel           = "info"
-	defaultReadHeaderTime     = 5 * time.Second
-	defaultShutdownTimeout    = 10 * time.Second
-	defaultMCPRateLimit       = 120
-	defaultMCPRateBurst       = 30
-	defaultLifecycleInterval  = time.Hour
-	defaultLifecycleBatchSize = 500
-	defaultVectorBackend      = "auto"
-	defaultVectorProvider     = "local-hash"
-	defaultVectorModel        = "embeddinggemma"
-	defaultVectorDimensions   = 384
-	defaultVectorOllamaURL    = "http://127.0.0.1:11434"
+	EnvAddr                           = "PAMIE_ADDR"
+	EnvToken                          = "PAMIE_TOKEN"
+	EnvTokenID                        = "PAMIE_TOKEN_ID"
+	EnvTokenScopes                    = "PAMIE_TOKEN_SCOPES"
+	EnvDataDir                        = "PAMIE_DATA_DIR"
+	EnvDatabasePath                   = "PAMIE_DB_PATH"
+	EnvLogLevel                       = "PAMIE_LOG_LEVEL"
+	EnvReadHeaderTimeout              = "PAMIE_READ_HEADER_TIMEOUT"
+	EnvShutdownTimeout                = "PAMIE_SHUTDOWN_TIMEOUT"
+	EnvMCPRateLimit                   = "PAMIE_MCP_RATE_LIMIT"
+	EnvMCPRateBurst                   = "PAMIE_MCP_RATE_BURST"
+	EnvLifecycleEnabled               = "PAMIE_LIFECYCLE_WORKER_ENABLED"
+	EnvLifecycleInterval              = "PAMIE_LIFECYCLE_INTERVAL"
+	EnvLifecycleBatchSize             = "PAMIE_LIFECYCLE_BATCH_SIZE"
+	EnvLifecycleRunOnStart            = "PAMIE_LIFECYCLE_RUN_ON_START"
+	EnvLifecycleStartupDelay          = "PAMIE_LIFECYCLE_STARTUP_DELAY"
+	EnvVectorSearchEnabled            = "PAMIE_VECTOR_SEARCH_ENABLED"
+	EnvVectorBackend                  = "PAMIE_VECTOR_BACKEND"
+	EnvVectorProvider                 = "PAMIE_VECTOR_PROVIDER"
+	EnvVectorModel                    = "PAMIE_VECTOR_MODEL"
+	EnvVectorDimensions               = "PAMIE_VECTOR_DIMENSIONS"
+	EnvVectorEmbeddingScope           = "PAMIE_VECTOR_EMBEDDING_SCOPE"
+	EnvVectorOllamaURL                = "PAMIE_VECTOR_OLLAMA_URL"
+	EnvVectorOllamaKeepAlive          = "PAMIE_VECTOR_OLLAMA_KEEP_ALIVE"
+	EnvVectorOllamaAutostart          = "PAMIE_VECTOR_OLLAMA_AUTOSTART"
+	EnvVectorOllamaCommand            = "PAMIE_VECTOR_OLLAMA_COMMAND"
+	EnvVectorOllamaStartupTimeout     = "PAMIE_VECTOR_OLLAMA_STARTUP_TIMEOUT"
+	defaultAddr                       = "127.0.0.1:17683"
+	defaultTokenID                    = "default"
+	defaultTokenScopes                = "all"
+	defaultDataDir                    = "data"
+	defaultDatabaseName               = "pamie.db"
+	defaultLogLevel                   = "info"
+	defaultReadHeaderTime             = 5 * time.Second
+	defaultShutdownTimeout            = 10 * time.Second
+	defaultMCPRateLimit               = 120
+	defaultMCPRateBurst               = 30
+	defaultLifecycleInterval          = time.Hour
+	defaultLifecycleBatchSize         = 500
+	defaultVectorBackend              = "auto"
+	defaultVectorProvider             = "local-hash"
+	defaultVectorModel                = "embeddinggemma"
+	defaultVectorDimensions           = 384
+	defaultVectorEmbeddingScope       = "title_keywords"
+	defaultVectorOllamaURL            = "http://127.0.0.1:11434"
+	defaultVectorOllamaCommand        = "ollama"
+	defaultVectorOllamaStartupTimeout = 10 * time.Second
 )
 
 // Config contains process configuration parsed during startup.
 type Config struct {
-	ShowVersion           bool
-	Addr                  string
-	BearerToken           string
-	BearerTokenID         string
-	BearerTokenScopes     string
-	DataDir               string
-	DatabasePath          string
-	LogLevel              string
-	ReadHeaderTimeout     time.Duration
-	ShutdownTimeout       time.Duration
-	MCPRateLimit          int
-	MCPRateBurst          int
-	LifecycleEnabled      bool
-	LifecycleInterval     time.Duration
-	LifecycleBatchSize    int
-	LifecycleRunOnStart   bool
-	LifecycleStartupDelay time.Duration
-	VectorSearchEnabled   bool
-	VectorBackend         string
-	VectorProvider        string
-	VectorModel           string
-	VectorDimensions      int
-	VectorOllamaURL       string
-	VectorOllamaKeepAlive string
+	ShowVersion                bool
+	Addr                       string
+	BearerToken                string
+	BearerTokenID              string
+	BearerTokenScopes          string
+	DataDir                    string
+	DatabasePath               string
+	LogLevel                   string
+	ReadHeaderTimeout          time.Duration
+	ShutdownTimeout            time.Duration
+	MCPRateLimit               int
+	MCPRateBurst               int
+	LifecycleEnabled           bool
+	LifecycleInterval          time.Duration
+	LifecycleBatchSize         int
+	LifecycleRunOnStart        bool
+	LifecycleStartupDelay      time.Duration
+	VectorSearchEnabled        bool
+	VectorBackend              string
+	VectorProvider             string
+	VectorModel                string
+	VectorDimensions           int
+	VectorEmbeddingScope       string
+	VectorOllamaURL            string
+	VectorOllamaKeepAlive      string
+	VectorOllamaAutostart      bool
+	VectorOllamaCommand        string
+	VectorOllamaStartupTimeout time.Duration
 }
 
 // Default returns safe local development defaults.
 func Default() Config {
 	return Config{
-		Addr:               defaultAddr,
-		BearerTokenID:      defaultTokenID,
-		BearerTokenScopes:  defaultTokenScopes,
-		DataDir:            defaultDataDir,
-		DatabasePath:       filepath.Join(defaultDataDir, defaultDatabaseName),
-		LogLevel:           defaultLogLevel,
-		ReadHeaderTimeout:  defaultReadHeaderTime,
-		ShutdownTimeout:    defaultShutdownTimeout,
-		MCPRateLimit:       defaultMCPRateLimit,
-		MCPRateBurst:       defaultMCPRateBurst,
-		LifecycleInterval:  defaultLifecycleInterval,
-		LifecycleBatchSize: defaultLifecycleBatchSize,
-		VectorBackend:      defaultVectorBackend,
-		VectorProvider:     defaultVectorProvider,
-		VectorModel:        defaultVectorModel,
-		VectorDimensions:   defaultVectorDimensions,
-		VectorOllamaURL:    defaultVectorOllamaURL,
+		Addr:                       defaultAddr,
+		BearerTokenID:              defaultTokenID,
+		BearerTokenScopes:          defaultTokenScopes,
+		DataDir:                    defaultDataDir,
+		DatabasePath:               filepath.Join(defaultDataDir, defaultDatabaseName),
+		LogLevel:                   defaultLogLevel,
+		ReadHeaderTimeout:          defaultReadHeaderTime,
+		ShutdownTimeout:            defaultShutdownTimeout,
+		MCPRateLimit:               defaultMCPRateLimit,
+		MCPRateBurst:               defaultMCPRateBurst,
+		LifecycleInterval:          defaultLifecycleInterval,
+		LifecycleBatchSize:         defaultLifecycleBatchSize,
+		VectorSearchEnabled:        true,
+		VectorBackend:              defaultVectorBackend,
+		VectorProvider:             defaultVectorProvider,
+		VectorModel:                defaultVectorModel,
+		VectorDimensions:           defaultVectorDimensions,
+		VectorEmbeddingScope:       defaultVectorEmbeddingScope,
+		VectorOllamaURL:            defaultVectorOllamaURL,
+		VectorOllamaCommand:        defaultVectorOllamaCommand,
+		VectorOllamaStartupTimeout: defaultVectorOllamaStartupTimeout,
 	}
 }
 
@@ -227,11 +242,31 @@ func Load(args []string, getenv func(string) string, output io.Writer) (Config, 
 		}
 		cfg.VectorDimensions = parsed
 	}
+	if value := getenv(EnvVectorEmbeddingScope); value != "" {
+		cfg.VectorEmbeddingScope = value
+	}
 	if value := getenv(EnvVectorOllamaURL); value != "" {
 		cfg.VectorOllamaURL = value
 	}
 	if value := getenv(EnvVectorOllamaKeepAlive); value != "" {
 		cfg.VectorOllamaKeepAlive = value
+	}
+	if value := getenv(EnvVectorOllamaAutostart); value != "" {
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("%s: %w", EnvVectorOllamaAutostart, err)
+		}
+		cfg.VectorOllamaAutostart = parsed
+	}
+	if value := getenv(EnvVectorOllamaCommand); value != "" {
+		cfg.VectorOllamaCommand = value
+	}
+	if value := getenv(EnvVectorOllamaStartupTimeout); value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("%s: %w", EnvVectorOllamaStartupTimeout, err)
+		}
+		cfg.VectorOllamaStartupTimeout = parsed
 	}
 
 	fs := flag.NewFlagSet("pamie", flag.ContinueOnError)
@@ -258,8 +293,12 @@ func Load(args []string, getenv func(string) string, output io.Writer) (Config, 
 	fs.StringVar(&cfg.VectorProvider, "vector-provider", cfg.VectorProvider, "local embedding provider: local-hash or ollama")
 	fs.StringVar(&cfg.VectorModel, "vector-model", cfg.VectorModel, "embedding model name for providers that require one")
 	fs.IntVar(&cfg.VectorDimensions, "vector-dimensions", cfg.VectorDimensions, "embedding dimensions for the local vector provider")
+	fs.StringVar(&cfg.VectorEmbeddingScope, "vector-embedding-scope", cfg.VectorEmbeddingScope, "embedding scope: title_keywords")
 	fs.StringVar(&cfg.VectorOllamaURL, "vector-ollama-url", cfg.VectorOllamaURL, "base URL for a local Ollama server")
 	fs.StringVar(&cfg.VectorOllamaKeepAlive, "vector-ollama-keep-alive", cfg.VectorOllamaKeepAlive, "Ollama keep_alive value for loaded embedding models")
+	fs.BoolVar(&cfg.VectorOllamaAutostart, "vector-ollama-autostart", cfg.VectorOllamaAutostart, "start local `ollama serve` when vector provider is ollama and Ollama is unavailable")
+	fs.StringVar(&cfg.VectorOllamaCommand, "vector-ollama-command", cfg.VectorOllamaCommand, "command used for Ollama autostart")
+	fs.DurationVar(&cfg.VectorOllamaStartupTimeout, "vector-ollama-startup-timeout", cfg.VectorOllamaStartupTimeout, "maximum wait for Ollama autostart readiness")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -349,6 +388,11 @@ func (c Config) Validate() error {
 	if c.VectorDimensions <= 0 {
 		return errors.New("vector dimensions must be positive")
 	}
+	switch c.VectorEmbeddingScope {
+	case "title_keywords":
+	default:
+		return fmt.Errorf("unsupported vector embedding scope %q", c.VectorEmbeddingScope)
+	}
 	if c.VectorProvider == "ollama" {
 		if strings.TrimSpace(c.VectorModel) == "" {
 			return errors.New("vector model must not be empty for ollama provider")
@@ -356,6 +400,12 @@ func (c Config) Validate() error {
 		if strings.TrimSpace(c.VectorOllamaURL) == "" {
 			return errors.New("vector ollama URL must not be empty")
 		}
+	}
+	if c.VectorOllamaAutostart && strings.TrimSpace(c.VectorOllamaCommand) == "" {
+		return errors.New("vector ollama command must not be empty when autostart is enabled")
+	}
+	if c.VectorOllamaStartupTimeout <= 0 {
+		return errors.New("vector ollama startup timeout must be positive")
 	}
 	return nil
 }

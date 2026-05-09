@@ -130,6 +130,7 @@ func runServer(args []string, getenv func(string) string, stdout, stderr io.Writ
 	}
 
 	var embeddingProvider embedding.Provider
+	var ollamaRuntime *embedding.OllamaRuntime
 	vectorBackend := db.VectorBackendSQLiteJSON
 	if cfg.VectorSearchEnabled {
 		vectorBackend, err = store.ResolveVectorBackend(context.Background(), cfg.VectorBackend)
@@ -137,27 +138,41 @@ func runServer(args []string, getenv func(string) string, stdout, stderr io.Writ
 			logger.Error("failed to configure vector backend", "error", err)
 			return err
 		}
+		if cfg.VectorProvider == embedding.OllamaProviderName {
+			ollamaRuntime, err = embedding.EnsureOllama(context.Background(), embedding.OllamaRuntimeOptions{
+				BaseURL:        cfg.VectorOllamaURL,
+				Autostart:      cfg.VectorOllamaAutostart,
+				Command:        cfg.VectorOllamaCommand,
+				StartupTimeout: cfg.VectorOllamaStartupTimeout,
+				Logger:         logger,
+			})
+			if err != nil {
+				logger.Warn("ollama runtime setup failed; vector indexing will fall back to FTS-only when embedding calls fail", "error", err)
+			}
+		}
 		embeddingProvider, err = newEmbeddingProvider(cfg.VectorProvider, cfg.VectorModel, cfg.VectorDimensions, cfg.VectorOllamaURL, cfg.VectorOllamaKeepAlive)
 		if err != nil {
 			logger.Error("failed to configure vector search", "error", err)
 			return err
 		}
-		logger.Info("vector search enabled", "provider", embeddingProvider.Name(), "model", embeddingProvider.Model(), "dimensions", embeddingProvider.Dimensions(), "backend", vectorBackend)
+		logger.Info("vector search enabled", "provider", embeddingProvider.Name(), "model", embeddingProvider.Model(), "dimensions", embeddingProvider.Dimensions(), "backend", vectorBackend, "embedding_scope", cfg.VectorEmbeddingScope)
 	}
 
 	memoryService := memory.NewServiceWithOptions(store, memory.Options{
-		EmbeddingProvider:   embeddingProvider,
-		VectorSearchEnabled: cfg.VectorSearchEnabled,
-		VectorBackend:       vectorBackend,
+		EmbeddingProvider:    embeddingProvider,
+		VectorSearchEnabled:  cfg.VectorSearchEnabled,
+		VectorBackend:        vectorBackend,
+		VectorEmbeddingScope: cfg.VectorEmbeddingScope,
 	})
 	toolRegistry := tools.NewRegistry(memoryService)
 	resourceRegistry := resources.NewRegistry(memoryService)
 	mcpHandler := mcp.NewHandler(mcp.Options{
-		Version:   version,
-		Tools:     toolRegistry,
-		Resources: resourceRegistry,
-		Logger:    logger,
-		Audit:     auditLogger,
+		Version:      version,
+		Instructions: resources.UsageInstructionsForEmbeddingScope(cfg.VectorEmbeddingScope, cfg.VectorSearchEnabled),
+		Tools:        toolRegistry,
+		Resources:    resourceRegistry,
+		Logger:       logger,
+		Audit:        auditLogger,
 	})
 
 	server, err := httpserver.New(httpserver.Options{
@@ -220,6 +235,13 @@ func runServer(args []string, getenv func(string) string, stdout, stderr io.Writ
 	if lifecycleDone != nil {
 		<-lifecycleDone
 	}
+	if ollamaRuntime != nil {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+		if stopErr := ollamaRuntime.Stop(stopCtx); stopErr != nil {
+			logger.Warn("failed to stop ollama process started by pamie", "error", stopErr)
+		}
+		stopCancel()
+	}
 	if err != nil {
 		logger.Error("server stopped with error", "error", err)
 		return err
@@ -250,7 +272,7 @@ func printTopLevelUsage(output io.Writer) {
   pamie token [rotate|create|list|revoke]
   pamie backup --db-path PATH --out PATH [--format sqlite|ndjson]
   pamie restore --db-path PATH --in PATH [--format sqlite|ndjson] (--dry-run|--confirm)
-  pamie embeddings backfill [--db-path PATH] [--limit N] [--reindex]
+  pamie embeddings backfill [--db-path PATH] [--limit N] [--embedding-scope title_keywords] [--reindex]
 
 Commands:
   start       Start Pamie in the background.
@@ -308,6 +330,8 @@ func operatorDefaults(getenv func(string) string) (string, string) {
 	dbPath := filepath.Join(defaultLocalDataDir(getenv), filepath.Base(cfg.DatabasePath))
 	if value := getenv(config.EnvDatabasePath); value != "" {
 		dbPath = value
+	} else if state, _, ok := runningDaemonState(daemonStatePaths(defaultLocalDataDir(getenv), getenv)); ok && strings.TrimSpace(state.DatabasePath) != "" {
+		dbPath = state.DatabasePath
 	}
 	logLevel := cfg.LogLevel
 	if value := getenv(config.EnvLogLevel); value != "" {
@@ -524,18 +548,20 @@ func runNDJSONRestore(ctx context.Context, dbPath, inPath string, dryRun bool, s
 		return err
 	}
 	if dryRun {
-		fmt.Fprintf(stdout, "restore validated: format=ndjson memory_items=%d memory_chunks=%d memory_events=%d retention_policies=%d access_logs=%d\n",
+		fmt.Fprintf(stdout, "restore validated: format=ndjson memory_items=%d memory_chunks=%d memory_keywords=%d memory_events=%d retention_policies=%d access_logs=%d\n",
 			summary.Counts.MemoryItems,
 			summary.Counts.MemoryChunks,
+			summary.Counts.MemoryKeywords,
 			summary.Counts.MemoryEvents,
 			summary.Counts.RetentionPolicies,
 			summary.Counts.AccessLogs,
 		)
 		return nil
 	}
-	fmt.Fprintf(stdout, "restore committed: format=ndjson memory_items=%d memory_chunks=%d memory_events=%d retention_policies=%d access_logs=%d\n",
+	fmt.Fprintf(stdout, "restore committed: format=ndjson memory_items=%d memory_chunks=%d memory_keywords=%d memory_events=%d retention_policies=%d access_logs=%d\n",
 		summary.Counts.MemoryItems,
 		summary.Counts.MemoryChunks,
+		summary.Counts.MemoryKeywords,
 		summary.Counts.MemoryEvents,
 		summary.Counts.RetentionPolicies,
 		summary.Counts.AccessLogs,
@@ -553,7 +579,7 @@ func runEmbeddingsCommand(ctx context.Context, args []string, getenv func(string
   pamie embeddings backfill [options]
 
 Subcommands:
-  backfill  Index missing embeddings, or all embeddings with --reindex.
+  backfill  Index missing title/keywords embeddings, or all embeddings with --reindex.
 `)
 		return nil
 	case "backfill":
@@ -583,6 +609,7 @@ func runEmbeddingsBackfillCommand(ctx context.Context, args []string, getenv fun
 	providerName := fs.String("provider", defaults.VectorProvider, "embedding provider: local-hash or ollama")
 	model := fs.String("model", defaults.VectorModel, "embedding model for providers that require one")
 	dimensions := fs.Int("dimensions", defaults.VectorDimensions, "embedding vector dimensions")
+	embeddingScope := fs.String("embedding-scope", defaults.VectorEmbeddingScope, "embedding scope: title_keywords")
 	backend := fs.String("backend", defaults.VectorBackend, "vector backend: auto, sqlite-json, or sqlite-vec")
 	ollamaURL := fs.String("ollama-url", defaults.VectorOllamaURL, "base URL for a local Ollama server")
 	ollamaKeepAlive := fs.String("ollama-keep-alive", defaults.VectorOllamaKeepAlive, "Ollama keep_alive value")
@@ -618,9 +645,10 @@ func runEmbeddingsBackfillCommand(ctx context.Context, args []string, getenv fun
 		return err
 	}
 	service := memory.NewServiceWithOptions(store, memory.Options{
-		EmbeddingProvider:   provider,
-		VectorSearchEnabled: true,
-		VectorBackend:       resolvedBackend,
+		EmbeddingProvider:    provider,
+		VectorSearchEnabled:  true,
+		VectorBackend:        resolvedBackend,
+		VectorEmbeddingScope: *embeddingScope,
 	})
 	var result memory.EmbeddingBackfillResult
 	if *reindex {
@@ -634,22 +662,28 @@ func runEmbeddingsBackfillCommand(ctx context.Context, args []string, getenv fun
 		"model":      provider.Model(),
 		"dimensions": provider.Dimensions(),
 		"backend":    resolvedBackend,
+		"scope":      *embeddingScope,
 		"limit":      *limit,
 		"reindex":    *reindex,
 		"scanned":    result.Scanned,
 		"indexed":    result.Indexed,
+		"failed":     result.Failed,
+		"skipped":    result.Skipped,
 	}
 	auditOperatorEvent(ctx, auditLogger, "embeddings_backfill", *dbPath, err, fields)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "embeddings backfill completed: scanned=%d indexed=%d provider=%s model=%s dimensions=%d backend=%s reindex=%t\n",
+	fmt.Fprintf(stdout, "embeddings backfill completed: scanned=%d indexed=%d failed=%d skipped=%d provider=%s model=%s dimensions=%d backend=%s scope=%s reindex=%t\n",
 		result.Scanned,
 		result.Indexed,
+		result.Failed,
+		result.Skipped,
 		provider.Name(),
 		provider.Model(),
 		provider.Dimensions(),
 		resolvedBackend,
+		*embeddingScope,
 		*reindex,
 	)
 	return nil
@@ -748,6 +782,7 @@ func recordCountAuditFields(dbPath, artifactPath string, counts db.ExportRecordC
 		"artifact_path":      artifactPath,
 		"memory_items":       counts.MemoryItems,
 		"memory_chunks":      counts.MemoryChunks,
+		"memory_keywords":    counts.MemoryKeywords,
 		"memory_events":      counts.MemoryEvents,
 		"retention_policies": counts.RetentionPolicies,
 		"access_logs":        counts.AccessLogs,

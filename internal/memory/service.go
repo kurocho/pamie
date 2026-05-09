@@ -10,7 +10,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/your-org/pamie/internal/db"
@@ -36,19 +38,21 @@ type Store interface {
 }
 
 type Options struct {
-	Clock               func() time.Time
-	EmbeddingProvider   embedding.Provider
-	VectorSearchEnabled bool
-	VectorBackend       string
+	Clock                func() time.Time
+	EmbeddingProvider    embedding.Provider
+	VectorSearchEnabled  bool
+	VectorBackend        string
+	VectorEmbeddingScope string
 }
 
 // Service coordinates memory behavior over durable storage.
 type Service struct {
-	store         Store
-	now           func() time.Time
-	embedder      embedding.Provider
-	vectorEnabled bool
-	vectorBackend string
+	store          Store
+	now            func() time.Time
+	embedder       embedding.Provider
+	vectorEnabled  bool
+	vectorBackend  string
+	embeddingScope string
 }
 
 // NewService creates a memory service.
@@ -68,17 +72,19 @@ func NewServiceWithOptions(store Store, opts Options) *Service {
 		now = time.Now
 	}
 	return &Service{
-		store:         store,
-		now:           now,
-		embedder:      opts.EmbeddingProvider,
-		vectorEnabled: opts.VectorSearchEnabled && opts.EmbeddingProvider != nil,
-		vectorBackend: normalizeVectorBackend(opts.VectorBackend),
+		store:          store,
+		now:            now,
+		embedder:       opts.EmbeddingProvider,
+		vectorEnabled:  opts.VectorSearchEnabled && opts.EmbeddingProvider != nil,
+		vectorBackend:  normalizeVectorBackend(opts.VectorBackend),
+		embeddingScope: normalizeEmbeddingScope(opts.VectorEmbeddingScope),
 	}
 }
 
 type SaveInput struct {
 	Title      string
 	Body       string
+	Keywords   []string
 	Source     string
 	Metadata   map[string]any
 	Tier       string
@@ -90,6 +96,7 @@ type UpdateInput struct {
 	ID         string
 	Title      *string
 	Body       *string
+	Keywords   *[]string
 	Source     *string
 	Metadata   *map[string]any
 	Tier       *string
@@ -131,6 +138,7 @@ type Memory struct {
 	ID             string         `json:"id"`
 	Title          string         `json:"title"`
 	Body           string         `json:"body"`
+	Keywords       []string       `json:"keywords"`
 	Source         string         `json:"source"`
 	Metadata       map[string]any `json:"metadata"`
 	Tier           string         `json:"tier"`
@@ -161,6 +169,8 @@ type SearchHit struct {
 	MemoryID     string       `json:"memory_id"`
 	ChunkID      string       `json:"chunk_id"`
 	Snippet      string       `json:"snippet"`
+	KeywordMatch bool         `json:"keyword_match"`
+	VectorMatch  bool         `json:"vector_match"`
 	Score        float64      `json:"score"`
 	ScoreDetails search.Score `json:"score_details"`
 }
@@ -170,6 +180,8 @@ type Stats = db.Stats
 type EmbeddingBackfillResult struct {
 	Scanned int `json:"scanned"`
 	Indexed int `json:"indexed"`
+	Failed  int `json:"failed"`
+	Skipped int `json:"skipped"`
 }
 
 func (s *Service) Save(ctx context.Context, input SaveInput) (Memory, error) {
@@ -189,6 +201,13 @@ func (s *Service) Save(ctx context.Context, input SaveInput) (Memory, error) {
 	}
 	metadataJSON, err := marshalMetadata(input.Metadata)
 	if err != nil {
+		return Memory{}, err
+	}
+	keywords, err := normalizeKeywords(input.Keywords)
+	if err != nil {
+		return Memory{}, err
+	}
+	if err := validateTitleKeywordsDocumentLength(input.Title, keywords); err != nil {
 		return Memory{}, err
 	}
 
@@ -221,10 +240,7 @@ func (s *Service) Save(ctx context.Context, input SaveInput) (Memory, error) {
 		Content:    item.Body,
 		CreatedAt:  now,
 	}
-	vectorMetadata, chunkEmbedding, err := s.embeddingForChunk(ctx, chunk, now)
-	if err != nil {
-		return Memory{}, err
-	}
+	dbKeywords := toDBKeywords(item.ID, keywords, now)
 
 	if err := store.WithinTx(ctx, func(ctx context.Context, tx *db.Tx) error {
 		if err := tx.Memories().CreateItem(ctx, item); err != nil {
@@ -233,13 +249,8 @@ func (s *Service) Save(ctx context.Context, input SaveInput) (Memory, error) {
 		if err := tx.Memories().AddChunk(ctx, chunk); err != nil {
 			return mapDBError(err)
 		}
-		if chunkEmbedding != nil {
-			if err := tx.Memories().UpsertVectorMetadata(ctx, vectorMetadata); err != nil {
-				return mapDBError(err)
-			}
-			if err := tx.Memories().UpsertEmbedding(ctx, *chunkEmbedding); err != nil {
-				return mapDBError(err)
-			}
+		if err := tx.Memories().ReplaceKeywords(ctx, item.ID, dbKeywords); err != nil {
+			return mapDBError(err)
 		}
 		_, err := tx.Memories().RecordEvent(ctx, db.MemoryEvent{
 			MemoryID:         item.ID,
@@ -252,7 +263,9 @@ func (s *Service) Save(ctx context.Context, input SaveInput) (Memory, error) {
 		return Memory{}, err
 	}
 
-	return toMemory(item), nil
+	s.indexMemoryEmbedding(ctx, store, item, chunk, keywords, now)
+
+	return toMemory(item, keywords), nil
 }
 
 func (s *Service) Get(ctx context.Context, id string) (MemoryWithChunks, error) {
@@ -263,6 +276,7 @@ func (s *Service) Get(ctx context.Context, id string) (MemoryWithChunks, error) 
 	now := s.now().UTC()
 	var item db.MemoryItem
 	var chunks []db.MemoryChunk
+	var keywords []db.MemoryKeyword
 	if err := store.WithinTx(ctx, func(ctx context.Context, tx *db.Tx) error {
 		var err error
 		item, err = tx.Memories().GetItem(ctx, id)
@@ -300,13 +314,17 @@ func (s *Service) Get(ctx context.Context, id string) (MemoryWithChunks, error) 
 			item.LastAccessedAt = &now
 		}
 		chunks, err = tx.Memories().ListChunks(ctx, id)
+		if err != nil {
+			return mapDBError(err)
+		}
+		keywords, err = tx.Memories().ListKeywords(ctx, id)
 		return mapDBError(err)
 	}); err != nil {
 		return MemoryWithChunks{}, err
 	}
 
 	return MemoryWithChunks{
-		Memory: toMemory(item),
+		Memory: toMemory(item, keywordStrings(keywords)),
 		Chunks: toChunks(chunks),
 	}, nil
 }
@@ -340,13 +358,14 @@ func (s *Service) Search(ctx context.Context, input SearchInput) ([]SearchHit, e
 	}
 	opts.Pinned = input.Pinned
 	if s.vectorSearchEnabled() {
-		queryEmbedding, err := s.embedder.Embed(ctx, input.Query)
+		queryEmbedding, err := s.embedder.Embed(ctx, boundedEmbeddingQuery(input.Query))
 		if err != nil {
-			return nil, fmt.Errorf("%w: embed search query: %v", ErrInvalid, err)
-		}
-		opts.Vector = &db.VectorSearchOptions{
-			Target:         s.embeddingTarget(),
-			QueryEmbedding: queryEmbedding,
+			slog.Default().Warn("vector query embedding failed; falling back to FTS search", "error", err)
+		} else {
+			opts.Vector = &db.VectorSearchOptions{
+				Target:         s.embeddingTarget(),
+				QueryEmbedding: queryEmbedding,
+			}
 		}
 	}
 
@@ -354,14 +373,24 @@ func (s *Service) Search(ctx context.Context, input SearchInput) ([]SearchHit, e
 	if err != nil {
 		return nil, mapDBError(err)
 	}
+	memoryIDs := make([]string, 0, len(results))
+	for _, result := range results {
+		memoryIDs = append(memoryIDs, result.Item.ID)
+	}
+	keywordsByMemory, err := store.Memories().ListKeywordsForMemories(ctx, memoryIDs)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
 
 	hits := make([]SearchHit, 0, len(results))
 	for _, result := range results {
 		hits = append(hits, SearchHit{
-			Memory:       toMemory(result.Item),
+			Memory:       toMemory(result.Item, keywordStrings(keywordsByMemory[result.Item.ID])),
 			MemoryID:     result.MemoryID,
 			ChunkID:      result.ChunkID,
 			Snippet:      result.Snippet,
+			KeywordMatch: result.KeywordMatched,
+			VectorMatch:  result.VectorSimilarity != nil,
 			Score:        result.Score.Total,
 			ScoreDetails: result.Score,
 		})
@@ -379,9 +408,9 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (Memory, error)
 	}
 	now := s.now().UTC()
 	var updated db.MemoryItem
-	var replacementChunk *db.MemoryChunk
-	var vectorMetadata db.VectorMetadata
-	var chunkEmbedding *db.MemoryEmbedding
+	var finalChunk db.MemoryChunk
+	var finalKeywords []db.MemoryKeyword
+	reindexEmbedding := input.Title != nil || input.Body != nil || input.Keywords != nil
 	if input.Body != nil {
 		chunkID, err := newID("chunk")
 		if err != nil {
@@ -394,11 +423,7 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (Memory, error)
 			Content:    *input.Body,
 			CreatedAt:  now,
 		}
-		replacementChunk = &chunk
-		vectorMetadata, chunkEmbedding, err = s.embeddingForChunk(ctx, chunk, now)
-		if err != nil {
-			return Memory{}, err
-		}
+		finalChunk = chunk
 	}
 
 	if err := store.WithinTx(ctx, func(ctx context.Context, tx *db.Tx) error {
@@ -409,6 +434,25 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (Memory, error)
 		if current.DeletedAt != nil {
 			return ErrNotFound
 		}
+		currentKeywords, err := tx.Memories().ListKeywords(ctx, input.ID)
+		if err != nil {
+			return mapDBError(err)
+		}
+		finalTitle := current.Title
+		if input.Title != nil {
+			finalTitle = *input.Title
+		}
+		finalKeywordStrings := keywordStrings(currentKeywords)
+		if input.Keywords != nil {
+			finalKeywordStrings, err = normalizeKeywords(*input.Keywords)
+			if err != nil {
+				return err
+			}
+		}
+		if err := validateTitleKeywordsDocumentLength(finalTitle, finalKeywordStrings); err != nil {
+			return err
+		}
+		finalKeywords = toDBKeywords(input.ID, finalKeywordStrings, now)
 
 		update := db.MemoryUpdate{UpdatedAt: now}
 		if input.Title != nil {
@@ -440,17 +484,22 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (Memory, error)
 		if err := tx.Memories().UpdateItem(ctx, input.ID, update); err != nil {
 			return mapDBError(err)
 		}
-		if replacementChunk != nil {
-			if err := tx.Memories().ReplaceChunks(ctx, input.ID, []db.MemoryChunk{*replacementChunk}); err != nil {
+		if input.Keywords != nil {
+			if err := tx.Memories().ReplaceKeywords(ctx, input.ID, finalKeywords); err != nil {
 				return mapDBError(err)
 			}
-			if chunkEmbedding != nil {
-				if err := tx.Memories().UpsertVectorMetadata(ctx, vectorMetadata); err != nil {
-					return mapDBError(err)
-				}
-				if err := tx.Memories().UpsertEmbedding(ctx, *chunkEmbedding); err != nil {
-					return mapDBError(err)
-				}
+		}
+		if input.Body != nil {
+			if err := tx.Memories().ReplaceChunks(ctx, input.ID, []db.MemoryChunk{finalChunk}); err != nil {
+				return mapDBError(err)
+			}
+		} else {
+			chunks, err := tx.Memories().ListChunks(ctx, input.ID)
+			if err != nil {
+				return mapDBError(err)
+			}
+			if len(chunks) > 0 {
+				finalChunk = chunks[0]
 			}
 		}
 		_, err = tx.Memories().RecordEvent(ctx, db.MemoryEvent{
@@ -467,7 +516,10 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (Memory, error)
 	}); err != nil {
 		return Memory{}, err
 	}
-	return toMemory(updated), nil
+	if reindexEmbedding && finalChunk.ID != "" {
+		s.indexMemoryEmbedding(ctx, store, updated, finalChunk, keywordStrings(finalKeywords), now)
+	}
+	return toMemory(updated, keywordStrings(finalKeywords)), nil
 }
 
 func (s *Service) Delete(ctx context.Context, input DeleteInput) (Memory, error) {
@@ -480,6 +532,7 @@ func (s *Service) Delete(ctx context.Context, input DeleteInput) (Memory, error)
 	}
 	now := s.now().UTC()
 	var item db.MemoryItem
+	var keywords []db.MemoryKeyword
 	if err := store.WithinTx(ctx, func(ctx context.Context, tx *db.Tx) error {
 		current, err := tx.Memories().GetItem(ctx, input.ID)
 		if err != nil {
@@ -504,11 +557,15 @@ func (s *Service) Delete(ctx context.Context, input DeleteInput) (Memory, error)
 			return mapDBError(err)
 		}
 		item, err = tx.Memories().GetItem(ctx, input.ID)
+		if err != nil {
+			return mapDBError(err)
+		}
+		keywords, err = tx.Memories().ListKeywords(ctx, input.ID)
 		return mapDBError(err)
 	}); err != nil {
 		return Memory{}, err
 	}
-	return toMemory(item), nil
+	return toMemory(item, keywordStrings(keywords)), nil
 }
 
 func (s *Service) Pin(ctx context.Context, input PinInput) (Memory, error) {
@@ -518,6 +575,7 @@ func (s *Service) Pin(ctx context.Context, input PinInput) (Memory, error) {
 	}
 	now := s.now().UTC()
 	var item db.MemoryItem
+	var keywords []db.MemoryKeyword
 	if err := store.WithinTx(ctx, func(ctx context.Context, tx *db.Tx) error {
 		current, err := tx.Memories().GetItem(ctx, input.ID)
 		if err != nil {
@@ -542,11 +600,15 @@ func (s *Service) Pin(ctx context.Context, input PinInput) (Memory, error) {
 			return mapDBError(err)
 		}
 		item, err = tx.Memories().GetItem(ctx, input.ID)
+		if err != nil {
+			return mapDBError(err)
+		}
+		keywords, err = tx.Memories().ListKeywords(ctx, input.ID)
 		return mapDBError(err)
 	}); err != nil {
 		return Memory{}, err
 	}
-	return toMemory(item), nil
+	return toMemory(item, keywordStrings(keywords)), nil
 }
 
 func (s *Service) Recent(ctx context.Context, input RecentInput) ([]Memory, error) {
@@ -561,10 +623,18 @@ func (s *Service) Recent(ctx context.Context, input RecentInput) ([]Memory, erro
 	if err != nil {
 		return nil, mapDBError(err)
 	}
+	memoryIDs := make([]string, 0, len(items))
+	for _, item := range items {
+		memoryIDs = append(memoryIDs, item.ID)
+	}
+	keywordsByMemory, err := store.Memories().ListKeywordsForMemories(ctx, memoryIDs)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
 
 	memories := make([]Memory, 0, len(items))
 	for _, item := range items {
-		memories = append(memories, toMemory(item))
+		memories = append(memories, toMemory(item, keywordStrings(keywordsByMemory[item.ID])))
 	}
 	return memories, nil
 }
@@ -601,7 +671,7 @@ func (s *Service) backfillEmbeddings(ctx context.Context, limit int, force bool)
 		limit = maxLimit
 	}
 	target := s.embeddingTarget()
-	chunks, err := store.Memories().ListChunksMissingEmbeddings(ctx, db.EmbeddingBackfillOptions{
+	candidates, err := store.Memories().ListEmbeddingBackfillCandidates(ctx, db.EmbeddingBackfillOptions{
 		Target: target,
 		Limit:  limit,
 		Force:  force,
@@ -609,22 +679,18 @@ func (s *Service) backfillEmbeddings(ctx context.Context, limit int, force bool)
 	if err != nil {
 		return EmbeddingBackfillResult{}, mapDBError(err)
 	}
-	result := EmbeddingBackfillResult{Scanned: len(chunks)}
-	for _, chunk := range chunks {
+	result := EmbeddingBackfillResult{Scanned: len(candidates)}
+	for _, candidate := range candidates {
 		now := s.now().UTC()
-		vectorMetadata, chunkEmbedding, err := s.embeddingForChunk(ctx, chunk, now)
-		if err != nil {
-			return result, err
+		status := s.indexMemoryEmbedding(ctx, store, candidate.Item, candidate.Chunk, keywordStrings(candidate.Keywords), now)
+		switch status {
+		case db.EmbeddingIndexStatusIndexed:
+			result.Indexed++
+		case db.EmbeddingIndexStatusSkipped:
+			result.Skipped++
+		case db.EmbeddingIndexStatusFailed:
+			result.Failed++
 		}
-		if err := store.WithinTx(ctx, func(ctx context.Context, tx *db.Tx) error {
-			if err := tx.Memories().UpsertVectorMetadata(ctx, vectorMetadata); err != nil {
-				return mapDBError(err)
-			}
-			return mapDBError(tx.Memories().UpsertEmbedding(ctx, *chunkEmbedding))
-		}); err != nil {
-			return result, err
-		}
-		result.Indexed++
 	}
 	return result, nil
 }
@@ -652,23 +718,39 @@ func (s *Service) embeddingTarget() db.EmbeddingTarget {
 		Provider:   s.embedder.Name(),
 		Model:      s.embedder.Model(),
 		Dimensions: s.embedder.Dimensions(),
+		Scope:      s.embeddingScope,
 	}
 }
 
-func (s *Service) embeddingForChunk(ctx context.Context, chunk db.MemoryChunk, now time.Time) (db.VectorMetadata, *db.MemoryEmbedding, error) {
+func (s *Service) indexMemoryEmbedding(ctx context.Context, store Store, item db.MemoryItem, chunk db.MemoryChunk, keywords []string, now time.Time) string {
 	if !s.vectorSearchEnabled() {
-		return db.VectorMetadata{}, nil, nil
+		return ""
 	}
-	vector, err := s.embedder.Embed(ctx, chunk.Content)
+	document, ok := buildTitleKeywordsEmbeddingDocument(item.Title, keywords)
+	if !ok {
+		s.recordEmbeddingIndexStatus(ctx, store, chunk, "", db.EmbeddingIndexStatusSkipped, "", 0, now)
+		return db.EmbeddingIndexStatusSkipped
+	}
+	hash := contentHash(document)
+	if runeLen(document) > MaxTitleKeywordsDocumentRunes {
+		s.recordEmbeddingIndexStatus(ctx, store, chunk, hash, db.EmbeddingIndexStatusFailed, "title and keywords document is too long", 1, now)
+		return db.EmbeddingIndexStatusFailed
+	}
+	vector, err := s.embedder.Embed(ctx, document)
 	if err != nil {
-		return db.VectorMetadata{}, nil, fmt.Errorf("%w: embed memory chunk: %v", ErrInvalid, err)
+		s.recordEmbeddingIndexStatus(ctx, store, chunk, hash, db.EmbeddingIndexStatusFailed, summarizeError(err), 1, now)
+		slog.Default().Warn("memory embedding failed; memory remains available through FTS", "memory_id", item.ID, "error", err)
+		return db.EmbeddingIndexStatusFailed
 	}
 	if len(vector) != s.embedder.Dimensions() {
-		return db.VectorMetadata{}, nil, fmt.Errorf("%w: embedding provider returned %d dimensions, want %d", ErrInvalid, len(vector), s.embedder.Dimensions())
+		message := fmt.Sprintf("embedding provider returned %d dimensions, want %d", len(vector), s.embedder.Dimensions())
+		s.recordEmbeddingIndexStatus(ctx, store, chunk, hash, db.EmbeddingIndexStatusFailed, message, 1, now)
+		return db.EmbeddingIndexStatusFailed
 	}
 	embeddingJSON, err := marshalEmbedding(vector)
 	if err != nil {
-		return db.VectorMetadata{}, nil, err
+		s.recordEmbeddingIndexStatus(ctx, store, chunk, hash, db.EmbeddingIndexStatusFailed, summarizeError(err), 1, now)
+		return db.EmbeddingIndexStatusFailed
 	}
 	target := s.embeddingTarget()
 	metadata := db.VectorMetadata{
@@ -677,21 +759,73 @@ func (s *Service) embeddingForChunk(ctx context.Context, chunk db.MemoryChunk, n
 		Dimensions:     target.Dimensions,
 		Backend:        s.vectorBackend,
 		DistanceMetric: "cosine",
+		EmbeddingScope: target.Scope,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
 	embedding := db.MemoryEmbedding{
-		ChunkID:       chunk.ID,
-		MemoryID:      chunk.MemoryID,
-		Provider:      target.Provider,
-		Model:         target.Model,
-		Dimensions:    target.Dimensions,
-		EmbeddingJSON: embeddingJSON,
-		ContentHash:   contentHash(chunk.Content),
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		ChunkID:        chunk.ID,
+		MemoryID:       chunk.MemoryID,
+		Provider:       target.Provider,
+		Model:          target.Model,
+		Dimensions:     target.Dimensions,
+		EmbeddingJSON:  embeddingJSON,
+		ContentHash:    hash,
+		EmbeddingScope: target.Scope,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
-	return metadata, &embedding, nil
+	if err := store.WithinTx(ctx, func(ctx context.Context, tx *db.Tx) error {
+		if err := tx.Memories().UpsertVectorMetadata(ctx, metadata); err != nil {
+			return mapDBError(err)
+		}
+		if err := tx.Memories().UpsertEmbedding(ctx, embedding); err != nil {
+			return mapDBError(err)
+		}
+		return mapDBError(tx.Memories().UpsertEmbeddingIndexStatus(ctx, db.EmbeddingIndexStatus{
+			ChunkID:        chunk.ID,
+			MemoryID:       chunk.MemoryID,
+			Provider:       target.Provider,
+			Model:          target.Model,
+			Dimensions:     target.Dimensions,
+			EmbeddingScope: target.Scope,
+			Status:         db.EmbeddingIndexStatusIndexed,
+			ContentHash:    hash,
+			Attempts:       1,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		}))
+	}); err != nil {
+		slog.Default().Warn("failed to persist memory embedding", "memory_id", item.ID, "error", err)
+		return db.EmbeddingIndexStatusFailed
+	}
+	return db.EmbeddingIndexStatusIndexed
+}
+
+func (s *Service) recordEmbeddingIndexStatus(ctx context.Context, store Store, chunk db.MemoryChunk, contentHashValue, status, errorSummary string, attempts int, now time.Time) {
+	if !s.vectorSearchEnabled() || store == nil {
+		return
+	}
+	target := s.embeddingTarget()
+	err := store.WithinTx(ctx, func(ctx context.Context, tx *db.Tx) error {
+		return mapDBError(tx.Memories().UpsertEmbeddingIndexStatus(ctx, db.EmbeddingIndexStatus{
+			ChunkID:        chunk.ID,
+			MemoryID:       chunk.MemoryID,
+			Provider:       target.Provider,
+			Model:          target.Model,
+			Dimensions:     target.Dimensions,
+			EmbeddingScope: target.Scope,
+			Status:         status,
+			ContentHash:    contentHashValue,
+			ErrorSummary:   errorSummary,
+			Attempts:       attempts,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		}))
+	})
+	if err != nil {
+		slog.Default().Warn("failed to persist embedding index status", "memory_id", chunk.MemoryID, "status", status, "error", err)
+	}
 }
 
 func marshalEmbedding(vector []float64) (string, error) {
@@ -712,6 +846,13 @@ func normalizeVectorBackend(backend string) string {
 		return db.VectorBackendSQLiteJSON
 	}
 	return backend
+}
+
+func normalizeEmbeddingScope(scope string) string {
+	if strings.TrimSpace(scope) == "" {
+		return titleKeywordsEmbeddingScope
+	}
+	return scope
 }
 
 func parseTier(value string) db.Tier {
@@ -756,11 +897,38 @@ func unmarshalMetadata(value string) map[string]any {
 	return metadata
 }
 
-func toMemory(item db.MemoryItem) Memory {
+func toDBKeywords(memoryID string, keywords []string, now time.Time) []db.MemoryKeyword {
+	out := make([]db.MemoryKeyword, 0, len(keywords))
+	for index, keyword := range keywords {
+		out = append(out, db.MemoryKeyword{
+			MemoryID:          memoryID,
+			KeywordIndex:      index,
+			Keyword:           keyword,
+			NormalizedKeyword: normalizedKeywordValue(keyword),
+			CreatedAt:         now,
+			UpdatedAt:         now,
+		})
+	}
+	return out
+}
+
+func keywordStrings(keywords []db.MemoryKeyword) []string {
+	out := make([]string, 0, len(keywords))
+	for _, keyword := range keywords {
+		out = append(out, keyword.Keyword)
+	}
+	return out
+}
+
+func toMemory(item db.MemoryItem, keywords []string) Memory {
+	if keywords == nil {
+		keywords = []string{}
+	}
 	return Memory{
 		ID:             item.ID,
 		Title:          item.Title,
 		Body:           item.Body,
+		Keywords:       keywords,
 		Source:         item.Source,
 		Metadata:       unmarshalMetadata(item.MetadataJSON),
 		Tier:           string(item.Tier),
@@ -772,6 +940,27 @@ func toMemory(item db.MemoryItem) Memory {
 		ArchivedAt:     item.ArchivedAt,
 		DeletedAt:      item.DeletedAt,
 	}
+}
+
+func boundedEmbeddingQuery(query string) string {
+	query = strings.TrimSpace(query)
+	runes := []rune(query)
+	if len(runes) <= MaxTitleKeywordsDocumentRunes {
+		return query
+	}
+	return string(runes[:MaxTitleKeywordsDocumentRunes])
+}
+
+func summarizeError(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := err.Error()
+	runes := []rune(message)
+	if len(runes) <= 512 {
+		return message
+	}
+	return string(runes[:512])
 }
 
 func toChunks(chunks []db.MemoryChunk) []Chunk {

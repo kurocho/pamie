@@ -42,20 +42,22 @@ type scopedResourceRegistry interface {
 }
 
 type Options struct {
-	Version   string
-	Tools     ToolRegistry
-	Resources ResourceRegistry
-	Logger    *slog.Logger
-	Audit     audit.Logger
+	Version      string
+	Instructions string
+	Tools        ToolRegistry
+	Resources    ResourceRegistry
+	Logger       *slog.Logger
+	Audit        audit.Logger
 }
 
 // Handler serves a minimal JSON-RPC MCP endpoint.
 type Handler struct {
-	version   string
-	tools     ToolRegistry
-	resources ResourceRegistry
-	logger    *slog.Logger
-	audit     audit.Logger
+	version      string
+	instructions string
+	tools        ToolRegistry
+	resources    ResourceRegistry
+	logger       *slog.Logger
+	audit        audit.Logger
 }
 
 func NewHandler(opts Options) *Handler {
@@ -65,12 +67,16 @@ func NewHandler(opts Options) *Handler {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
+	if opts.Instructions == "" {
+		opts.Instructions = resources.UsageInstructions
+	}
 	return &Handler{
-		version:   opts.Version,
-		tools:     opts.Tools,
-		resources: opts.Resources,
-		logger:    opts.Logger,
-		audit:     opts.Audit,
+		version:      opts.Version,
+		instructions: opts.Instructions,
+		tools:        opts.Tools,
+		resources:    opts.Resources,
+		logger:       opts.Logger,
+		audit:        opts.Audit,
 	}
 }
 
@@ -154,7 +160,7 @@ func (h *Handler) dispatch(ctx context.Context, req rpcRequest) (any, *rpcError)
 				"name":    "pamie",
 				"version": h.version,
 			},
-			"instructions": resources.UsageInstructions,
+			"instructions": h.instructions,
 		}, nil
 	case "notifications/initialized":
 		return map[string]any{}, nil

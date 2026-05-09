@@ -7,7 +7,7 @@ Owner of memory domain behavior.
 - Define memory item domain types.
 - Enforce tier semantics.
 - Coordinate save, update, delete, pin, and retrieve behavior.
-- Coordinate optional local embedding writes and backfill.
+- Coordinate optional title/keywords embedding writes and backfill.
 - Apply lifecycle decisions for promotion, demotion, archive, and deletion.
 - Record memory events.
 
@@ -25,8 +25,8 @@ The memory service depends on a narrow `Store` interface and coordinates typed s
 - saving a memory with one initial searchable chunk;
 - retrieving a memory and its chunks;
 - FTS-backed and optional hybrid search with safe filters, snippets, depth controls, and score details;
-- embedding storage on save/update when vector search is enabled;
-- repeatable missing-embedding backfill;
+- best-effort title/keywords embedding storage on save/update when vector search is enabled;
+- repeatable missing/failed embedding backfill;
 - updating mutable fields;
 - conservative soft deletion;
 - pinning and unpinning;
@@ -34,7 +34,7 @@ The memory service depends on a narrow `Store` interface and coordinates typed s
 - aggregate stats.
 - lifecycle promotion, demotion, archive, policy deletion, pinned protection, and important-memory protection.
 
-Scheduled lifecycle execution lives in `internal/lifecycle`, which calls this package through `RunLifecycle` and does not change the domain rules. Vector search is optional and disabled unless configured at startup.
+Scheduled lifecycle execution lives in `internal/lifecycle`, which calls this package through `RunLifecycle` and does not change the domain rules. Vector search is optional and disabled unless configured at startup. Full memory bodies remain the FTS5 source; embedding providers receive only the memory title and explicit keywords.
 
 ## Boundary
 

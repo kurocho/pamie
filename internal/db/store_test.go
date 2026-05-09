@@ -52,8 +52,8 @@ func TestOpenAppliesPragmasAndMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppliedMigrationVersions() error = %v", err)
 	}
-	if !reflect.DeepEqual(versions, []int{1, 2, 3, 4}) {
-		t.Fatalf("versions = %v, want [1 2 3 4]", versions)
+	if !reflect.DeepEqual(versions, []int{1, 2, 3, 4, 5}) {
+		t.Fatalf("versions = %v, want [1 2 3 4 5]", versions)
 	}
 
 	if err := store.ApplyMigrations(ctx); err != nil {
@@ -63,8 +63,8 @@ func TestOpenAppliesPragmasAndMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppliedMigrationVersions() after rerun error = %v", err)
 	}
-	if !reflect.DeepEqual(versions, []int{1, 2, 3, 4}) {
-		t.Fatalf("versions after rerun = %v, want [1 2 3 4]", versions)
+	if !reflect.DeepEqual(versions, []int{1, 2, 3, 4, 5}) {
+		t.Fatalf("versions after rerun = %v, want [1 2 3 4 5]", versions)
 	}
 }
 
@@ -125,11 +125,53 @@ func TestMemoryRepositoryInsertGetAndChunks(t *testing.T) {
 	}
 }
 
+func TestMemoryRepositoryKeywordsRoundTrip(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := fixedTime()
+	if err := store.Memories().CreateItem(ctx, MemoryItem{
+		ID:        "mem_keywords",
+		Body:      "keyword body",
+		Tier:      TierWorking,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("CreateItem() error = %v", err)
+	}
+	first := []MemoryKeyword{
+		{MemoryID: "mem_keywords", KeywordIndex: 0, Keyword: "Alpha", NormalizedKeyword: "alpha", CreatedAt: now, UpdatedAt: now},
+		{MemoryID: "mem_keywords", KeywordIndex: 1, Keyword: "Beta", NormalizedKeyword: "beta", CreatedAt: now, UpdatedAt: now},
+	}
+	if err := store.Memories().ReplaceKeywords(ctx, "mem_keywords", first); err != nil {
+		t.Fatalf("ReplaceKeywords() error = %v", err)
+	}
+	keywords, err := store.Memories().ListKeywords(ctx, "mem_keywords")
+	if err != nil {
+		t.Fatalf("ListKeywords() error = %v", err)
+	}
+	if len(keywords) != 2 || keywords[0].Keyword != "Alpha" || keywords[1].Keyword != "Beta" {
+		t.Fatalf("keywords = %+v, want Alpha and Beta", keywords)
+	}
+	second := []MemoryKeyword{
+		{MemoryID: "mem_keywords", KeywordIndex: 0, Keyword: "Gamma", NormalizedKeyword: "gamma", CreatedAt: now, UpdatedAt: now},
+	}
+	if err := store.Memories().ReplaceKeywords(ctx, "mem_keywords", second); err != nil {
+		t.Fatalf("ReplaceKeywords(second) error = %v", err)
+	}
+	keywords, err = store.Memories().ListKeywords(ctx, "mem_keywords")
+	if err != nil {
+		t.Fatalf("ListKeywords() after replace error = %v", err)
+	}
+	if len(keywords) != 1 || keywords[0].Keyword != "Gamma" {
+		t.Fatalf("keywords after replace = %+v, want only Gamma", keywords)
+	}
+}
+
 func TestMemoryRepositoryEmbeddingsAndBackfillCandidates(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 	now := fixedTime()
-	target := EmbeddingTarget{Provider: "test", Model: "unit-v1", Dimensions: 3}
+	target := EmbeddingTarget{Provider: "test", Model: "unit-v1", Dimensions: 3, Scope: EmbeddingScopeTitleKeywords}
 
 	if err := store.Memories().CreateItem(ctx, MemoryItem{
 		ID:         "mem_embed",
@@ -166,34 +208,37 @@ func TestMemoryRepositoryEmbeddingsAndBackfillCandidates(t *testing.T) {
 		Dimensions:     target.Dimensions,
 		Backend:        "sqlite-json",
 		DistanceMetric: "cosine",
+		EmbeddingScope: target.Scope,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}); err != nil {
 		t.Fatalf("UpsertVectorMetadata() error = %v", err)
 	}
 	if err := store.Memories().UpsertEmbedding(ctx, MemoryEmbedding{
-		ChunkID:       chunk.ID,
-		MemoryID:      chunk.MemoryID,
-		Provider:      target.Provider,
-		Model:         target.Model,
-		Dimensions:    target.Dimensions,
-		EmbeddingJSON: vectorJSON(t, []float64{1, 0, 0}),
-		ContentHash:   "hash-1",
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		ChunkID:        chunk.ID,
+		MemoryID:       chunk.MemoryID,
+		Provider:       target.Provider,
+		Model:          target.Model,
+		Dimensions:     target.Dimensions,
+		EmbeddingJSON:  vectorJSON(t, []float64{1, 0, 0}),
+		ContentHash:    "hash-1",
+		EmbeddingScope: target.Scope,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}); err != nil {
 		t.Fatalf("UpsertEmbedding() error = %v", err)
 	}
 	if err := store.Memories().UpsertEmbedding(ctx, MemoryEmbedding{
-		ChunkID:       chunk.ID,
-		MemoryID:      chunk.MemoryID,
-		Provider:      target.Provider,
-		Model:         target.Model,
-		Dimensions:    target.Dimensions,
-		EmbeddingJSON: vectorJSON(t, []float64{0, 1, 0}),
-		ContentHash:   "hash-2",
-		CreatedAt:     now,
-		UpdatedAt:     now.Add(time.Minute),
+		ChunkID:        chunk.ID,
+		MemoryID:       chunk.MemoryID,
+		Provider:       target.Provider,
+		Model:          target.Model,
+		Dimensions:     target.Dimensions,
+		EmbeddingJSON:  vectorJSON(t, []float64{0, 1, 0}),
+		ContentHash:    "hash-2",
+		EmbeddingScope: target.Scope,
+		CreatedAt:      now,
+		UpdatedAt:      now.Add(time.Minute),
 	}); err != nil {
 		t.Fatalf("UpsertEmbedding() second run error = %v", err)
 	}
@@ -341,13 +386,14 @@ func TestMemoryRepositoryHybridVectorSearch(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 	now := fixedTime()
-	target := EmbeddingTarget{Provider: "test", Model: "hybrid-v1", Dimensions: 2}
+	target := EmbeddingTarget{Provider: "test", Model: "hybrid-v1", Dimensions: 2, Scope: EmbeddingScopeTitleKeywords}
 	if err := store.Memories().UpsertVectorMetadata(ctx, VectorMetadata{
 		Provider:       target.Provider,
 		Model:          target.Model,
 		Dimensions:     target.Dimensions,
 		Backend:        "sqlite-json",
 		DistanceMetric: "cosine",
+		EmbeddingScope: target.Scope,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}); err != nil {
@@ -383,6 +429,17 @@ func TestMemoryRepositoryHybridVectorSearch(t *testing.T) {
 		CreatedAt:    now.Add(-time.Hour),
 		UpdatedAt:    now.Add(-time.Hour),
 	}, MemoryChunk{ID: "chunk_other", MemoryID: "mem_other_project", ChunkIndex: 0, Content: "another semantic neighbor", CreatedAt: now}, target, []float64{0, 1})
+	bodyScopeTarget := target
+	bodyScopeTarget.Scope = EmbeddingScopeBody
+	insertMemoryWithVector(t, store, MemoryItem{
+		ID:           "mem_body_scope",
+		Body:         "body scoped vector should be ignored",
+		MetadataJSON: `{"project":"pamie"}`,
+		Tier:         TierWorking,
+		Importance:   100,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}, MemoryChunk{ID: "chunk_body_scope", MemoryID: "mem_body_scope", ChunkIndex: 0, Content: "body scoped vector should be ignored", CreatedAt: now}, bodyScopeTarget, []float64{0, 1})
 
 	disabledResults, err := store.Memories().Search(ctx, SearchOptions{
 		Query: "alpha",
@@ -422,6 +479,9 @@ func TestMemoryRepositoryHybridVectorSearch(t *testing.T) {
 		if result.MemoryID == "mem_other_project" {
 			t.Fatalf("metadata filter allowed other project result: %+v", results)
 		}
+		if result.MemoryID == "mem_body_scope" {
+			t.Fatalf("title/keywords vector search returned body-scope embedding: %+v", results)
+		}
 	}
 }
 
@@ -429,13 +489,14 @@ func TestMemoryRepositorySQLiteVecSearch(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 	now := fixedTime()
-	target := EmbeddingTarget{Provider: "test", Model: "sqlite-vec-v1", Dimensions: 2}
+	target := EmbeddingTarget{Provider: "test", Model: "sqlite-vec-v1", Dimensions: 2, Scope: EmbeddingScopeTitleKeywords}
 	if err := store.Memories().UpsertVectorMetadata(ctx, VectorMetadata{
 		Provider:       target.Provider,
 		Model:          target.Model,
 		Dimensions:     target.Dimensions,
 		Backend:        VectorBackendSQLiteVec,
 		DistanceMetric: "cosine",
+		EmbeddingScope: target.Scope,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}); err != nil {
@@ -664,15 +725,16 @@ func insertMemoryWithVector(t *testing.T, store *Store, item MemoryItem, chunk M
 		t.Fatalf("AddChunk(%s) error = %v", chunk.ID, err)
 	}
 	if err := store.Memories().UpsertEmbedding(ctx, MemoryEmbedding{
-		ChunkID:       chunk.ID,
-		MemoryID:      chunk.MemoryID,
-		Provider:      target.Provider,
-		Model:         target.Model,
-		Dimensions:    target.Dimensions,
-		EmbeddingJSON: vectorJSON(t, vector),
-		ContentHash:   "hash-" + chunk.ID,
-		CreatedAt:     item.CreatedAt,
-		UpdatedAt:     item.UpdatedAt,
+		ChunkID:        chunk.ID,
+		MemoryID:       chunk.MemoryID,
+		Provider:       target.Provider,
+		Model:          target.Model,
+		Dimensions:     target.Dimensions,
+		EmbeddingJSON:  vectorJSON(t, vector),
+		ContentHash:    "hash-" + chunk.ID,
+		EmbeddingScope: target.Scope,
+		CreatedAt:      item.CreatedAt,
+		UpdatedAt:      item.UpdatedAt,
 	}); err != nil {
 		t.Fatalf("UpsertEmbedding(%s) error = %v", chunk.ID, err)
 	}
