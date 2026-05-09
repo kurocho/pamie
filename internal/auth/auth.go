@@ -4,12 +4,11 @@ package auth
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/your-org/pamie/internal/audit"
 )
@@ -143,12 +142,14 @@ type Token struct {
 type BearerAuthenticator struct {
 	configured bool
 	tokens     []tokenRecord
+	source     TokenSource
 	audit      audit.Logger
 }
 
 type tokenRecord struct {
 	id        string
-	tokenHash [sha256.Size]byte
+	tokenHash string
+	tokenSalt string
 	scopes    ScopeSet
 }
 
@@ -163,31 +164,47 @@ func NewBearerAuthenticatorWithOptions(token string, tokenID string, scopes Scop
 	if token == "" {
 		return &BearerAuthenticator{audit: auditLogger}, nil
 	}
-	if strings.TrimSpace(token) != token || strings.ContainsAny(token, " \t\r\n") {
-		return nil, ErrMalformedAuth
-	}
-	if strings.TrimSpace(tokenID) == "" {
-		return nil, errors.New("token id must not be empty")
-	}
-	if scopes == nil {
-		scopes = AllScopes()
+	stored, err := NewStoredToken(tokenID, token, scopes, time.Now().UTC())
+	if err != nil {
+		return nil, err
 	}
 	return &BearerAuthenticator{
 		configured: true,
 		tokens: []tokenRecord{
 			{
-				id:        tokenID,
-				tokenHash: sha256.Sum256([]byte(token)),
-				scopes:    scopes,
+				id:        stored.ID,
+				tokenHash: stored.TokenHash,
+				tokenSalt: stored.TokenSalt,
+				scopes:    stored.Scopes,
 			},
 		},
 		audit: auditLogger,
 	}, nil
 }
 
+// NewBearerAuthenticatorWithSource creates an authenticator backed by dynamic stored tokens.
+func NewBearerAuthenticatorWithSource(source TokenSource, auditLogger audit.Logger) (*BearerAuthenticator, error) {
+	if source == nil {
+		return nil, errors.New("token source must not be nil")
+	}
+	return &BearerAuthenticator{
+		configured: true,
+		source:     source,
+		audit:      auditLogger,
+	}, nil
+}
+
+// UseTokenSource adds dynamic stored tokens to an authenticator.
+func (a *BearerAuthenticator) UseTokenSource(source TokenSource) {
+	if a == nil {
+		return
+	}
+	a.source = source
+}
+
 // Configured reports whether a token was configured at startup.
 func (a *BearerAuthenticator) Configured() bool {
-	return a != nil && a.configured
+	return a != nil && (a.configured || a.source != nil)
 }
 
 // Authenticate validates the HTTP Authorization header.
@@ -198,8 +215,17 @@ func (a *BearerAuthenticator) Authenticate(r *http.Request) error {
 
 // AuthenticateRequest validates the HTTP Authorization header and returns the principal.
 func (a *BearerAuthenticator) AuthenticateRequest(r *http.Request) (Principal, error) {
-	if a == nil || !a.configured {
+	if a == nil || (!a.configured && a.source == nil) {
 		return Principal{}, ErrNotConfigured
+	}
+	now := time.Now().UTC()
+	var sourceTokens []StoredToken
+	if !a.configured && a.source != nil {
+		var err error
+		sourceTokens, err = a.source.ActiveTokens(r.Context(), now)
+		if err != nil || len(sourceTokens) == 0 {
+			return Principal{}, ErrNotConfigured
+		}
 	}
 	header := r.Header.Get("Authorization")
 	if header == "" {
@@ -211,13 +237,44 @@ func (a *BearerAuthenticator) AuthenticateRequest(r *http.Request) (Principal, e
 		return Principal{}, ErrMalformedAuth
 	}
 
-	tokenHash := sha256.Sum256([]byte(token))
 	for _, configured := range a.tokens {
-		if subtle.ConstantTimeCompare(tokenHash[:], configured.tokenHash[:]) == 1 {
+		if VerifyBearerTokenHash(token, configured.tokenSalt, configured.tokenHash) {
 			return Principal{
 				TokenID: configured.id,
 				Scopes:  configured.scopes,
 			}, nil
+		}
+	}
+
+	if a.source != nil {
+		if sourceTokens == nil {
+			var err error
+			sourceTokens, err = a.source.ActiveTokens(r.Context(), now)
+			if err != nil {
+				return Principal{}, ErrNotConfigured
+			}
+		}
+		for _, configured := range sourceTokens {
+			if configured.RevokedAt != nil {
+				continue
+			}
+			if configured.ExpiresAt != nil && !configured.ExpiresAt.After(now) {
+				continue
+			}
+			if VerifyBearerTokenHash(token, configured.TokenSalt, configured.TokenHash) {
+				scopes := configured.Scopes
+				if scopes == nil {
+					scopes = AllScopes()
+				}
+				_ = a.source.RecordTokenUsed(r.Context(), configured.ID, now)
+				return Principal{
+					TokenID: configured.ID,
+					Scopes:  scopes,
+				}, nil
+			}
+		}
+		if len(a.tokens) == 0 && len(sourceTokens) == 0 {
+			return Principal{}, ErrNotConfigured
 		}
 	}
 

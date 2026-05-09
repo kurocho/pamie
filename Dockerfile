@@ -35,3 +35,4 @@ EXPOSE 8080
 VOLUME ["/data"]
 
 ENTRYPOINT ["/pamie"]
+CMD ["serve"]

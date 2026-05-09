@@ -37,7 +37,7 @@ const (
 	EnvVectorDimensions       = "PAMIE_VECTOR_DIMENSIONS"
 	EnvVectorOllamaURL        = "PAMIE_VECTOR_OLLAMA_URL"
 	EnvVectorOllamaKeepAlive  = "PAMIE_VECTOR_OLLAMA_KEEP_ALIVE"
-	defaultAddr               = "127.0.0.1:8080"
+	defaultAddr               = "127.0.0.1:17683"
 	defaultTokenID            = "default"
 	defaultTokenScopes        = "all"
 	defaultDataDir            = "data"

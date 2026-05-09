@@ -106,6 +106,9 @@ This checklist tracks implementation work. Keep it updated when a phase is start
 - [x] Hash stored tokens.
 - [x] Add token IDs.
 - [x] Add scopes.
+- [x] Add persistent token storage.
+- [x] Add token rotation and revocation commands.
+- [x] Record persistent token last-used timestamps.
 - [x] Add rate limiting.
 - [x] Add audit logs.
 - [x] Review prompt injection handling.

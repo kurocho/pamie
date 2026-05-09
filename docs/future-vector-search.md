@@ -83,13 +83,22 @@ Backfill is resumable through `memory.Service.BackfillEmbeddings`: it lists acti
 Operators can run backfill from the CLI:
 
 ```sh
-pamie embeddings backfill --db-path data/pamie.db --limit 500
+pamie embeddings backfill --limit 500
+```
+
+For Ollama-backed semantic embeddings, run Ollama locally and pull the default embedding model first:
+
+```sh
+ollama serve
+ollama pull embeddinggemma
+pamie start --vector-search --vector-provider ollama --vector-model embeddinggemma --vector-dimensions 384
+pamie embeddings backfill --provider ollama --model embeddinggemma --dimensions 384 --backend auto --limit 500
 ```
 
 Use `--reindex` after changing provider, model, dimensions, or backend:
 
 ```sh
-pamie embeddings backfill --db-path data/pamie.db --provider ollama --model embeddinggemma --dimensions 384 --backend sqlite-vec --reindex
+pamie embeddings backfill --provider ollama --model embeddinggemma --dimensions 384 --backend sqlite-vec --reindex
 ```
 
 ## Hybrid Ranking

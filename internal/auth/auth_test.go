@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/your-org/pamie/internal/audit"
 )
@@ -105,6 +106,39 @@ func TestBearerAuthenticatorAttachesPrincipalAndAuditsTokenID(t *testing.T) {
 	}
 }
 
+func TestBearerAuthenticatorUsesDynamicTokenSource(t *testing.T) {
+	now := time.Now().UTC()
+	secret, stored, err := NewGeneratedStoredToken("agent-db", ScopeSet{ScopeMemoryRead: {}}, now)
+	if err != nil {
+		t.Fatalf("NewGeneratedStoredToken() error = %v", err)
+	}
+	source := &dynamicTokenSource{tokens: []StoredToken{stored}}
+	authenticator, err := NewBearerAuthenticatorWithSource(source, nil)
+	if err != nil {
+		t.Fatalf("NewBearerAuthenticatorWithSource() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	principal, err := authenticator.AuthenticateRequest(req)
+	if err != nil {
+		t.Fatalf("AuthenticateRequest() error = %v", err)
+	}
+	if principal.TokenID != "agent-db" || !principal.Scopes.Has(ScopeMemoryRead) || principal.Scopes.Has(ScopeMemoryWrite) {
+		t.Fatalf("principal = %+v", principal)
+	}
+	if source.usedTokenID != "agent-db" || source.usedAt.Before(now) {
+		t.Fatalf("source touch = %q at %v, want agent-db after %v", source.usedTokenID, source.usedAt, now)
+	}
+
+	source.tokens = nil
+	req = httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	if _, err := authenticator.AuthenticateRequest(req); err != ErrNotConfigured {
+		t.Fatalf("AuthenticateRequest() error = %v, want ErrNotConfigured", err)
+	}
+}
+
 func TestScopes(t *testing.T) {
 	scopes, err := ParseScopes("memory:read stats:read")
 	if err != nil {
@@ -140,4 +174,20 @@ type captureAudit struct {
 
 func (c *captureAudit) Log(_ context.Context, event audit.Event) {
 	c.events = append(c.events, event)
+}
+
+type dynamicTokenSource struct {
+	tokens      []StoredToken
+	usedTokenID string
+	usedAt      time.Time
+}
+
+func (s *dynamicTokenSource) ActiveTokens(_ context.Context, _ time.Time) ([]StoredToken, error) {
+	return s.tokens, nil
+}
+
+func (s *dynamicTokenSource) RecordTokenUsed(_ context.Context, tokenID string, usedAt time.Time) error {
+	s.usedTokenID = tokenID
+	s.usedAt = usedAt
+	return nil
 }

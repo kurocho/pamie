@@ -18,11 +18,11 @@ Pamie is planned as a single, self-contained Go service. The first production ta
 
 ## Authentication
 
-Bearer authentication is implemented as HTTP middleware before `/mcp`. The current phase accepts one configured token from `PAMIE_TOKEN` or `--token`. If no token is configured, `/mcp` rejects requests with `503 Service Unavailable` instead of becoming open.
+Bearer authentication is implemented as HTTP middleware before `/mcp`. The current phase accepts persistent hashed tokens from SQLite and an optional bootstrap token from `PAMIE_TOKEN` or `--token`. If no token is configured, `/mcp` rejects requests with `503 Service Unavailable` instead of becoming open.
 
-The configured token is hashed in memory, authenticated requests carry a token ID and scope set in request context, MCP tools/resources enforce scopes, `/mcp` has configurable per-client rate limiting, and audit events record auth, MCP calls, resource reads, and rate-limit blocks without token values.
+Persistent token commands create, rotate, list, and revoke token metadata while showing raw generated tokens only once. Authenticated requests carry a token ID and scope set in request context, MCP tools/resources enforce scopes, `/mcp` has configurable per-client rate limiting, and audit events record auth, MCP calls, resource reads, and rate-limit blocks without token values.
 
-Future production hardening should add multiple active tokens, persistent hashed token storage, rotation, revocation, and tamper-resistant audit storage.
+Future production hardening should add tamper-resistant audit storage.
 
 ## Configuration and Logging
 

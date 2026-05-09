@@ -6,7 +6,7 @@ Pamie is intended to expose a memory service to MCP agents. That makes its secur
 
 Primary assets:
 
-- Bearer tokens and future token metadata.
+- Bearer tokens and token metadata.
 - Stored memories and metadata.
 - SQLite database files and backups.
 - Operator configuration.
@@ -25,14 +25,14 @@ Primary threats:
 ## Authentication Requirements
 
 - Public MCP access must require Bearer authentication.
-- The current implementation protects `/mcp` with one configured token from `PAMIE_TOKEN` or `--token`.
-- The authenticator stores only token hashes for comparison; startup configuration must still be treated as sensitive and must not be logged.
-- `PAMIE_TOKEN_ID` / `--token-id` configures a non-secret token identifier for audit logs.
-- `PAMIE_TOKEN_SCOPES` / `--token-scopes` configures comma-separated scopes. The default is `all` for development compatibility.
+- The current implementation protects `/mcp` with persistent hashed tokens managed by `pamie token`.
+- `PAMIE_TOKEN` / `--token` remains available as a bootstrap or emergency token mode.
+- Persistent token records store only salted token hashes, token IDs, scopes, creation timestamps, last-used timestamps, optional expiration, and revoked state.
+- `PAMIE_TOKEN_ID` / `--token-id` configures a non-secret token identifier for the bootstrap token in audit logs.
+- `PAMIE_TOKEN_SCOPES` / `--token-scopes` configures comma-separated scopes for the bootstrap token. The default is `all` for development compatibility.
 - If no token is configured, `/mcp` rejects requests instead of allowing anonymous access.
 - Tokens must not be logged.
-- Future persistent token storage should store hashes, not plaintext.
-- Future token storage should add creation timestamps, last-used timestamps, rotation, revocation, and multiple active tokens.
+- `pamie token` prints generated raw tokens only once. Run `pamie token` again to rotate the default token.
 - Token comparison must avoid obvious timing leaks where practical.
 
 Implemented scopes:
@@ -76,7 +76,7 @@ Agents may retrieve a memory that says to ignore instructions, reveal secrets, d
 
 ## Audit Logging Plan
 
-Structured audit logging is implemented for authentication, MCP tool calls, MCP resource reads, rate-limit blocks, and local backup/restore operator commands. Current request logs intentionally avoid headers and token values.
+Structured audit logging is implemented for authentication, MCP tool calls, MCP resource reads, rate-limit blocks, and local backup/restore operator commands. Current request logs intentionally avoid headers and token values. Successful persistent-token authentication updates the token's last-used timestamp.
 
 Memory mutation and lifecycle events are recorded in `memory_events`, including lifecycle promotion, demotion, archive, and policy deletion. This is useful for explainability and deletion accountability, but it is not a complete security audit log.
 
@@ -95,7 +95,7 @@ Logs must not include full Bearer tokens.
 
 ## Backup and Export Artifacts
 
-SQLite backups and NDJSON exports contain memory bodies, metadata, lifecycle history, retention policies, and access logs. They do not contain raw Bearer tokens because Pamie does not store raw tokens, but access logs can contain non-secret token IDs that may still reveal operational context.
+SQLite backups contain memory bodies, metadata, lifecycle history, retention policies, access logs, and hashed token metadata. NDJSON exports contain memory data and access logs, but not raw Bearer tokens. Pamie does not store raw tokens; access logs and token records can still contain non-secret token IDs that reveal operational context.
 
 Protect backup and export artifacts at least as strictly as the live database:
 

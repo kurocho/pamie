@@ -15,7 +15,7 @@ services:
       PAMIE_MCP_RATE_LIMIT: ${PAMIE_MCP_RATE_LIMIT:-120}
       PAMIE_MCP_RATE_BURST: ${PAMIE_MCP_RATE_BURST:-30}
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:17683:8080"
     volumes:
       - pamie-data:/data
 

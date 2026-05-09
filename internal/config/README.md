@@ -19,6 +19,8 @@ Owner of process configuration.
 
 Configuration is loaded once during startup from environment variables and command-line flags. Environment values set defaults and explicit flags take precedence.
 
+The foreground server path (`pamie serve`) uses the process defaults below. The local background command (`pamie start`) defaults its data directory to the user's local data directory when `PAMIE_DATA_DIR` is unset.
+
 Current environment variables:
 
 - `PAMIE_ADDR`

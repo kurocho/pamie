@@ -52,8 +52,8 @@ func TestOpenAppliesPragmasAndMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppliedMigrationVersions() error = %v", err)
 	}
-	if !reflect.DeepEqual(versions, []int{1, 2, 3}) {
-		t.Fatalf("versions = %v, want [1 2 3]", versions)
+	if !reflect.DeepEqual(versions, []int{1, 2, 3, 4}) {
+		t.Fatalf("versions = %v, want [1 2 3 4]", versions)
 	}
 
 	if err := store.ApplyMigrations(ctx); err != nil {
@@ -63,8 +63,8 @@ func TestOpenAppliesPragmasAndMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppliedMigrationVersions() after rerun error = %v", err)
 	}
-	if !reflect.DeepEqual(versions, []int{1, 2, 3}) {
-		t.Fatalf("versions after rerun = %v, want [1 2 3]", versions)
+	if !reflect.DeepEqual(versions, []int{1, 2, 3, 4}) {
+		t.Fatalf("versions after rerun = %v, want [1 2 3 4]", versions)
 	}
 }
 

@@ -110,35 +110,45 @@ Choose a different install directory when needed:
 
 ## Run Locally
 
-Run the installed command:
+Start Pamie in the background:
 
 ```sh
-PAMIE_TOKEN=dev-token \
-PAMIE_TOKEN_ID=dev \
-PAMIE_TOKEN_SCOPES=all \
-pamie --addr 127.0.0.1:8080 --data-dir ./data
+pamie start
 ```
 
-Or run directly from source without installing:
+On first start, Pamie creates a local data directory, starts on `127.0.0.1:17683`, and prints a generated Bearer token once. Store that token in your MCP client. If you need a new one later, rotate it:
+
+```sh
+pamie token
+```
+
+Check or stop the background process:
+
+```sh
+pamie status
+pamie stop
+```
+
+Run in the foreground for development, Docker, or a service manager:
 
 ```sh
 PAMIE_TOKEN=dev-token \
 PAMIE_TOKEN_ID=dev \
 PAMIE_TOKEN_SCOPES=all \
-go run ./cmd/pamie --addr 127.0.0.1:8080 --data-dir ./data
+go run ./cmd/pamie serve --addr 127.0.0.1:17683 --data-dir ./data
 ```
 
 Check liveness and readiness:
 
 ```sh
-curl http://127.0.0.1:8080/health
-curl http://127.0.0.1:8080/ready
+curl http://127.0.0.1:17683/health
+curl http://127.0.0.1:17683/ready
 ```
 
 List MCP tools through the protected endpoint:
 
 ```sh
-curl -i -X POST http://127.0.0.1:8080/mcp \
+curl -i -X POST http://127.0.0.1:17683/mcp \
   -H 'Authorization: Bearer dev-token' \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
@@ -146,10 +156,19 @@ curl -i -X POST http://127.0.0.1:8080/mcp \
 
 If no token is configured, `/mcp` rejects all requests.
 
+Persistent token management:
+
+```sh
+pamie token list
+pamie token create --id readonly --scopes memory:read,stats:read
+pamie token rotate --id readonly
+pamie token revoke --id readonly
+```
+
 Version output:
 
 ```sh
-go run ./cmd/pamie --version
+pamie --version
 ```
 
 Operator backup and restore:
@@ -166,22 +185,28 @@ pamie backup --format ndjson --db-path data/pamie.db --out backup.ndjson
 pamie restore --format ndjson --db-path restored.db --in backup.ndjson --dry-run
 ```
 
-Optional vector search and embedding backfill:
+Optional vector search with Ollama:
 
 ```sh
-pamie \
-  --addr 127.0.0.1:8080 \
-  --data-dir ./data \
+ollama serve
+ollama pull embeddinggemma
+```
+
+Then start Pamie with local semantic embeddings:
+
+```sh
+pamie start \
+  --addr 127.0.0.1:17683 \
   --vector-search \
   --vector-backend auto \
   --vector-provider ollama \
   --vector-model embeddinggemma \
   --vector-dimensions 384
 
-pamie embeddings backfill --db-path data/pamie.db --provider ollama --model embeddinggemma --dimensions 384 --backend auto --limit 500
+pamie embeddings backfill --provider ollama --model embeddinggemma --dimensions 384 --backend auto --limit 500
 ```
 
-Vector search is off by default. Keep it disabled with the default settings, or pass `--vector-search=false` to override an environment setting. The `ollama` provider expects a local Ollama server. Use `local-hash` for dependency-free deterministic test embeddings.
+Vector search is off by default. Keep it disabled with the default settings, or pass `--vector-search=false` to override an environment setting. The `ollama` provider expects a local Ollama server. `embeddinggemma` is the default 384-dimensional embedding model; use `local-hash` for dependency-free deterministic test embeddings. Vector search improves semantic recall for paraphrases and conceptually similar memories while FTS5 still handles exact keyword matches, filters, snippets, and deterministic ranking signals.
 
 ## Docker
 
@@ -194,7 +219,7 @@ docker volume create pamie-data
 export PAMIE_TOKEN="$(openssl rand -hex 32)"
 docker run --rm \
   --name pamie \
-  -p 127.0.0.1:8080:8080 \
+  -p 127.0.0.1:17683:8080 \
   -v pamie-data:/data \
   -e PAMIE_TOKEN="$PAMIE_TOKEN" \
   -e PAMIE_TOKEN_ID=local \
@@ -214,7 +239,7 @@ Run the locally built image:
 export PAMIE_TOKEN="$(openssl rand -hex 32)"
 docker run --rm \
   --name pamie \
-  -p 127.0.0.1:8080:8080 \
+  -p 127.0.0.1:17683:8080 \
   -v pamie-data:/data \
   -e PAMIE_TOKEN="$PAMIE_TOKEN" \
   -e PAMIE_TOKEN_ID=local \
@@ -225,8 +250,8 @@ docker run --rm \
 Check the running container:
 
 ```sh
-curl http://127.0.0.1:8080/health
-curl http://127.0.0.1:8080/ready
+curl http://127.0.0.1:17683/health
+curl http://127.0.0.1:17683/ready
 ```
 
 Run an operator backup from the image:
@@ -249,7 +274,7 @@ export PAMIE_TOKEN="$(openssl rand -hex 32)"
 docker compose up --build
 ```
 
-The Compose example binds Pamie to `127.0.0.1:8080` by default. Public deployments must use HTTPS, for example with the included Caddy profile and a real hostname.
+The Compose example binds Pamie to `127.0.0.1:17683` by default. Public deployments must use HTTPS, for example with the included Caddy profile and a real hostname.
 
 Run a backup through Compose:
 
@@ -263,9 +288,9 @@ docker compose run --rm --no-deps \
 
 ## Current Status
 
-Docker and release foundation is implemented for the current surface. The Go module starts an HTTP server with structured logging, `/health`, `/ready`, Bearer-protected `/mcp`, configuration from flags and environment, scoped token principals, in-memory token hashing, per-client `/mcp` rate limiting, structured audit events, graceful shutdown, SQLite startup with migrations, WAL mode, foreign keys, initial tables, typed repository methods, MCP JSON-RPC handling, memory tools, first-use MCP instructions, safe read-only resources, deterministic tier lifecycle rules, access-based promotion, retention-policy deletion, lifecycle events, an opt-in scheduled lifecycle worker, FTS5-backed search with safe filters, snippets, depth controls, explainable ranking, optional local vector storage and hybrid ranking with sqlite-vec acceleration, local backup, restore, and embedding backfill operator commands, Docker/Compose assets, Caddy HTTPS guidance, and release artifact automation.
+Docker and release foundation is implemented for the current surface. The Go module starts an HTTP server with structured logging, `/health`, `/ready`, Bearer-protected `/mcp`, configuration from flags and environment, persistent hashed tokens, token rotation and revocation commands, scoped token principals, per-client `/mcp` rate limiting, structured audit events, graceful shutdown, SQLite startup with migrations, WAL mode, foreign keys, initial tables, typed repository methods, MCP JSON-RPC handling, memory tools, first-use MCP instructions, safe read-only resources, deterministic tier lifecycle rules, access-based promotion, retention-policy deletion, lifecycle events, an opt-in scheduled lifecycle worker, FTS5-backed search with safe filters, snippets, depth controls, explainable ranking, optional local vector storage and hybrid ranking with sqlite-vec acceleration, local backup, restore, and embedding backfill operator commands, Docker/Compose assets, Caddy HTTPS guidance, and release artifact automation.
 
-Vector search is disabled by default and supports `local-hash` deterministic embeddings, local Ollama semantic embeddings, SQLite JSON fallback storage, and sqlite-vec acceleration. There is still no multi-token persistent token storage, token rotation, or tamper-proof audit log subsystem yet.
+Vector search is disabled by default and supports `local-hash` deterministic embeddings, local Ollama semantic embeddings, SQLite JSON fallback storage, and sqlite-vec acceleration. Tamper-proof audit log storage is still future hardening work.
 
 ## Roadmap
 

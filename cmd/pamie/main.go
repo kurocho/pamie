@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/your-org/pamie/internal/audit"
 	"github.com/your-org/pamie/internal/auth"
@@ -36,12 +37,37 @@ const (
 )
 
 func main() {
-	if isTopLevelHelp(os.Args[1:]) {
+	args := os.Args[1:]
+	if isTopLevelHelp(args) {
 		printTopLevelUsage(os.Stdout)
 		return
 	}
-	if len(os.Args) > 1 && isOperatorCommand(os.Args[1]) {
-		if err := runOperatorCommand(context.Background(), os.Args[1], os.Args[2:], os.Getenv, os.Stdout, os.Stderr); err != nil {
+	if len(args) == 0 {
+		printTopLevelUsage(os.Stdout)
+		return
+	}
+	if args[0] == "serve" {
+		if err := runServer(args[1:], os.Getenv, os.Stdout, os.Stderr); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return
+			}
+			fmt.Fprintf(os.Stderr, "server error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if strings.HasPrefix(args[0], "-") {
+		if err := runServer(args, os.Getenv, os.Stdout, os.Stderr); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return
+			}
+			fmt.Fprintf(os.Stderr, "server error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if isOperatorCommand(args[0]) {
+		if err := runOperatorCommand(context.Background(), args[0], args[1:], os.Getenv, os.Stdout, os.Stderr); err != nil {
 			if errors.Is(err, flag.ErrHelp) {
 				return
 			}
@@ -50,46 +76,35 @@ func main() {
 		}
 		return
 	}
+	fmt.Fprintf(os.Stderr, "unknown command %q\n\n", args[0])
+	printTopLevelUsage(os.Stderr)
+	os.Exit(2)
+}
 
-	cfg, err := config.Load(os.Args[1:], os.Getenv, os.Stderr)
+func runServer(args []string, getenv func(string) string, stdout, stderr io.Writer) error {
+	cfg, err := config.Load(args, getenv, stderr)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			return
+			return err
 		}
-		fmt.Fprintf(os.Stderr, "configuration error: %v\n", err)
-		os.Exit(2)
+		return fmt.Errorf("configuration: %w", err)
 	}
 
 	if cfg.ShowVersion {
-		fmt.Printf("pamie %s\n", version)
-		return
+		fmt.Fprintf(stdout, "pamie %s\n", version)
+		return nil
 	}
 
-	logger, err := newLogger(cfg.LogLevel)
+	logger, err := newLoggerTo(cfg.LogLevel, stdout)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "configuration error: %v\n", err)
-		os.Exit(2)
+		return fmt.Errorf("configuration: %w", err)
 	}
 	auditLogger := audit.NewSlogLogger(logger)
-
-	scopes, err := auth.ParseScopes(cfg.BearerTokenScopes)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "configuration error: invalid bearer token scopes\n")
-		os.Exit(2)
-	}
-	authenticator, err := auth.NewBearerAuthenticatorWithOptions(cfg.BearerToken, cfg.BearerTokenID, scopes, auditLogger)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "configuration error: invalid bearer token\n")
-		os.Exit(2)
-	}
-	if !authenticator.Configured() {
-		logger.Warn("bearer token is not configured; /mcp will reject requests")
-	}
 
 	store, err := db.Open(context.Background(), db.Options{Path: cfg.DatabasePath})
 	if err != nil {
 		logger.Error("failed to open database", "error", err, "path", cfg.DatabasePath)
-		os.Exit(1)
+		return err
 	}
 	defer func() {
 		if err := store.Close(); err != nil {
@@ -97,18 +112,35 @@ func main() {
 		}
 	}()
 
+	scopes, err := auth.ParseScopes(cfg.BearerTokenScopes)
+	if err != nil {
+		return errors.New("configuration: invalid bearer token scopes")
+	}
+	authenticator, err := auth.NewBearerAuthenticatorWithOptions(cfg.BearerToken, cfg.BearerTokenID, scopes, auditLogger)
+	if err != nil {
+		return errors.New("configuration: invalid bearer token")
+	}
+	authenticator.UseTokenSource(databaseTokenSource{repo: store.Tokens()})
+	activeTokens, err := store.Tokens().CountActive(context.Background(), time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	if cfg.BearerToken == "" && activeTokens == 0 {
+		logger.Warn("bearer token is not configured; /mcp will reject requests")
+	}
+
 	var embeddingProvider embedding.Provider
 	vectorBackend := db.VectorBackendSQLiteJSON
 	if cfg.VectorSearchEnabled {
 		vectorBackend, err = store.ResolveVectorBackend(context.Background(), cfg.VectorBackend)
 		if err != nil {
 			logger.Error("failed to configure vector backend", "error", err)
-			os.Exit(2)
+			return err
 		}
 		embeddingProvider, err = newEmbeddingProvider(cfg.VectorProvider, cfg.VectorModel, cfg.VectorDimensions, cfg.VectorOllamaURL, cfg.VectorOllamaKeepAlive)
 		if err != nil {
 			logger.Error("failed to configure vector search", "error", err)
-			os.Exit(2)
+			return err
 		}
 		logger.Info("vector search enabled", "provider", embeddingProvider.Name(), "model", embeddingProvider.Model(), "dimensions", embeddingProvider.Dimensions(), "backend", vectorBackend)
 	}
@@ -151,7 +183,7 @@ func main() {
 	})
 	if err != nil {
 		logger.Error("failed to configure server", "error", err)
-		os.Exit(1)
+		return err
 	}
 
 	var lifecycleWorker *lifecycle.Worker
@@ -168,7 +200,7 @@ func main() {
 		})
 		if err != nil {
 			logger.Error("failed to configure lifecycle worker", "error", err)
-			os.Exit(1)
+			return err
 		}
 	}
 
@@ -190,9 +222,10 @@ func main() {
 	}
 	if err != nil {
 		logger.Error("server stopped with error", "error", err)
-		os.Exit(1)
+		return err
 	}
 	logger.Info("pamie stopped")
+	return nil
 }
 
 func isTopLevelHelp(args []string) bool {
@@ -209,12 +242,22 @@ func isTopLevelHelp(args []string) bool {
 
 func printTopLevelUsage(output io.Writer) {
 	fmt.Fprint(output, `Usage:
-  pamie [server options]
+  pamie
+  pamie start [server options]
+  pamie serve [server options]
+  pamie status
+  pamie stop
+  pamie token [rotate|create|list|revoke]
   pamie backup --db-path PATH --out PATH [--format sqlite|ndjson]
   pamie restore --db-path PATH --in PATH [--format sqlite|ndjson] (--dry-run|--confirm)
   pamie embeddings backfill [--db-path PATH] [--limit N] [--reindex]
 
 Commands:
+  start       Start Pamie in the background.
+  serve       Run Pamie in the foreground for Docker, systemd, and development.
+  status      Show background process and health status.
+  stop        Stop the background Pamie process.
+  token       Create, rotate, list, or revoke persistent tokens.
   backup      Create a SQLite backup, or NDJSON with --format ndjson.
   restore     Validate or restore a SQLite backup, or NDJSON with --format ndjson.
   embeddings  Manage local embedding indexes.
@@ -228,7 +271,7 @@ Server options:
 
 func isOperatorCommand(command string) bool {
 	switch command {
-	case "backup", "restore", "embeddings":
+	case "start", "status", "stop", "token", "backup", "restore", "embeddings":
 		return true
 	default:
 		return false
@@ -238,6 +281,14 @@ func isOperatorCommand(command string) bool {
 func runOperatorCommand(ctx context.Context, command string, args []string, getenv func(string) string, stdout, stderr io.Writer) error {
 	defaultDBPath, defaultLogLevel := operatorDefaults(getenv)
 	switch command {
+	case "start":
+		return runStartCommand(ctx, args, getenv, stdout, stderr)
+	case "status":
+		return runStatusCommand(ctx, args, getenv, stdout, stderr)
+	case "stop":
+		return runStopCommand(ctx, args, getenv, stdout, stderr)
+	case "token":
+		return runTokenCommand(ctx, args, stdout, stderr, defaultDBPath)
 	case "backup":
 		return runBackupCommand(ctx, args, stdout, stderr, defaultDBPath, defaultLogLevel)
 	case "restore":
@@ -254,10 +305,7 @@ func operatorDefaults(getenv func(string) string) (string, string) {
 		getenv = os.Getenv
 	}
 	cfg := config.Default()
-	dbPath := cfg.DatabasePath
-	if dataDir := getenv(config.EnvDataDir); dataDir != "" {
-		dbPath = filepath.Join(dataDir, filepath.Base(cfg.DatabasePath))
-	}
+	dbPath := filepath.Join(defaultLocalDataDir(getenv), filepath.Base(cfg.DatabasePath))
 	if value := getenv(config.EnvDatabasePath); value != "" {
 		dbPath = value
 	}

@@ -206,6 +206,11 @@ func (s *Store) AccessLog() *AccessLogRepository {
 	return &AccessLogRepository{exec: s.database}
 }
 
+// Tokens returns a repository for persistent auth tokens.
+func (s *Store) Tokens() *TokenRepository {
+	return &TokenRepository{exec: s.database}
+}
+
 // WithinTx runs fn inside a database transaction.
 func (s *Store) WithinTx(ctx context.Context, fn func(context.Context, *Tx) error) error {
 	tx, err := s.database.BeginTx(ctx, nil)

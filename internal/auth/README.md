@@ -15,11 +15,11 @@ Owner of authentication and authorization decisions.
 - HTTP routing.
 - MCP tool behavior.
 - Memory storage.
-- Token generation UX.
+- SQLite persistence details for token metadata.
 
 ## Current Implementation
 
-The current implementation validates one configured Bearer token. Token comparison hashes the provided token and uses constant-time comparison against the configured token hash. If no token is configured, protected endpoints reject requests.
+The current implementation validates either a bootstrap Bearer token from process configuration or persistent tokens from a dynamic token source. Persistent tokens store only salted hashes, token IDs, scopes, creation timestamps, last-used timestamps, optional expiration, and revoked state. If no token is configured, protected endpoints reject requests.
 
 Authenticated requests receive a request-context principal containing a non-secret token ID and scope set. The middleware returns generic unauthorized responses for missing, malformed, and invalid tokens. It emits audit events with token IDs and failure reasons, but not token values.
 
@@ -34,4 +34,4 @@ Implemented scopes:
 
 ## Boundary
 
-Later implementations should support multiple active tokens, persistent hashed token storage, rotation, revocation, and last-used timestamps.
+This package owns token generation, hashing, verification, principal construction, and scope checks. Storage packages own durable persistence.

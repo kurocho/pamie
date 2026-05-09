@@ -1,12 +1,19 @@
 # Auth and Security
 
-Pamie's public MCP endpoint must be authenticated. The current auth mechanism is Bearer token validation with in-memory hashing, token IDs, scopes, audit events, and `/mcp` rate limiting.
+Pamie's public MCP endpoint must be authenticated. The current auth mechanism is Bearer token validation with persistent hashed tokens, token IDs, scopes, audit events, and `/mcp` rate limiting.
 
 ## Current Auth
 
-The current implementation accepts one configured token and rejects unauthenticated requests to `/mcp`. The configured token is hashed before comparison, and successful requests receive a principal containing a non-secret token ID and scope set.
+The current implementation accepts multiple persistent tokens managed by `pamie token` and rejects unauthenticated requests to `/mcp`. Raw generated tokens are shown once, then only salted hashes are stored. Successful requests receive a principal containing a non-secret token ID and scope set, and persistent tokens get a last-used timestamp update.
 
-Configuration:
+Token commands:
+
+- `pamie token`: rotate the default token and print the new secret once.
+- `pamie token create --id <id> --scopes <scopes>`: create another client token.
+- `pamie token list`: list token metadata without secrets.
+- `pamie token revoke --id <id>`: disable a token.
+
+Bootstrap environment configuration remains available:
 
 - `PAMIE_TOKEN` / `--token`
 - `PAMIE_TOKEN_ID` / `--token-id`
@@ -23,13 +30,9 @@ Scopes:
 - `backup:read`
 - `memory:admin`
 
-## Hardening Path
+## Hashing
 
-- Add persistent hashed token storage.
-- Support multiple active tokens.
-- Support token rotation.
-- Support token revocation and last-used timestamps.
-- Add tamper-resistant audit storage where operators need stronger audit guarantees.
+Generated tokens use cryptographically secure randomness and are long enough that salted SHA-256 storage is practical for the generated-token path. Do not choose short human tokens for `PAMIE_TOKEN`. Add tamper-resistant audit storage where operators need stronger audit guarantees.
 
 ## Public Deployments
 

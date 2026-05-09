@@ -8,20 +8,29 @@ Docker Hub repository: <https://hub.docker.com/repository/docker/kurocho/pamie/g
 
 ## Local Development
 
-Current development server:
+Run the installed binary locally:
+
+```sh
+pamie start
+pamie status
+```
+
+The first `pamie start` run starts Pamie in the background on `127.0.0.1:17683`, creates the local data directory, and prints a generated Bearer token once. Rotate that token later with `pamie token`.
+
+Foreground development server:
 
 ```sh
 PAMIE_TOKEN=dev-token \
 PAMIE_TOKEN_ID=dev \
 PAMIE_TOKEN_SCOPES=all \
-go run ./cmd/pamie --addr 127.0.0.1:8080 --data-dir ./data
+go run ./cmd/pamie serve --addr 127.0.0.1:17683 --data-dir ./data
 ```
 
 Health and readiness:
 
 ```sh
-curl http://127.0.0.1:8080/health
-curl http://127.0.0.1:8080/ready
+curl http://127.0.0.1:17683/health
+curl http://127.0.0.1:17683/ready
 ```
 
 ## Production Shape
@@ -30,7 +39,7 @@ curl http://127.0.0.1:8080/ready
 - Persistent `/data` directory.
 - SQLite database under the data directory.
 - Reverse proxy for HTTPS.
-- Environment or file-based token configuration.
+- Persistent hashed tokens managed by `pamie token`, with environment token configuration available for bootstrap or service-manager deployments.
 - Scoped Bearer tokens with non-secret token IDs.
 - Per-client `/mcp` rate limiting in Pamie and optionally at the reverse proxy.
 - Regular backups through explicit operator commands.
@@ -58,7 +67,7 @@ Run locally with a persistent named volume and localhost-only port binding:
 docker volume create pamie-data
 docker run --rm \
   --name pamie \
-  -p 127.0.0.1:8080:8080 \
+  -p 127.0.0.1:17683:8080 \
   -v pamie-data:/data \
   -e PAMIE_TOKEN="$PAMIE_TOKEN" \
   -e PAMIE_TOKEN_ID=local \
@@ -69,7 +78,7 @@ docker run --rm \
 Check health from the host:
 
 ```sh
-curl http://127.0.0.1:8080/health
+curl http://127.0.0.1:17683/health
 ```
 
 The image does not include a shell, `curl`, `sqlite3`, or backup tools.
@@ -77,7 +86,7 @@ It does include Pamie's own `backup` and `restore` operator subcommands.
 
 ## Compose
 
-`compose.yaml` provides a local-first deployment. By default it binds Pamie to `127.0.0.1:8080` only.
+`compose.yaml` provides a local-first deployment. By default it binds Pamie to `127.0.0.1:17683` only.
 
 ```sh
 export PAMIE_TOKEN="$(openssl rand -hex 32)"
@@ -100,7 +109,7 @@ The Caddy example in `deploy/Caddyfile.example` terminates HTTPS, proxies to Pam
 Minimum public-facing configuration:
 
 ```sh
-PAMIE_ADDR=127.0.0.1:8080
+PAMIE_ADDR=127.0.0.1:17683
 PAMIE_TOKEN='<long random token>'
 PAMIE_TOKEN_ID='primary-agent'
 PAMIE_TOKEN_SCOPES='memory:read,memory:write,memory:delete,stats:read'
@@ -108,7 +117,7 @@ PAMIE_MCP_RATE_LIMIT=120
 PAMIE_MCP_RATE_BURST=30
 ```
 
-Use `memory:admin` only for trusted operator tokens. Use narrower scopes for routine agents, for example `memory:read,stats:read` for read-only retrieval clients.
+Use `pamie token create --id readonly --scopes memory:read,stats:read` for routine read-only retrieval clients. Use `memory:admin` only for trusted operator tokens.
 
 Do not put tokens in command history for production systems. Prefer a service manager environment file with restrictive permissions or a platform secret store. Pamie logs token IDs for audit attribution but does not log raw Bearer tokens.
 
@@ -130,7 +139,7 @@ Run Pamie behind Caddy, nginx, Traefik, or a platform load balancer. Expose only
 
 ### Homelab
 
-Bind Pamie to a private address or VPN-only interface. If exposing through a tunnel or reverse proxy, keep Bearer auth enabled and rate limiting active. Avoid sharing the same token between every agent; use scoped tokens once persistent multi-token support exists.
+Bind Pamie to a private address or VPN-only interface. If exposing through a tunnel or reverse proxy, keep Bearer auth enabled and rate limiting active. Avoid sharing the same token between every agent; create scoped tokens per client.
 
 ## Scheduled Backups
 

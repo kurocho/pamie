@@ -1,6 +1,6 @@
 # SQLite Schema
 
-The implemented schema lives in `internal/db/migrations/0001_initial_schema.sql`. This document describes the current shape at a higher level.
+The implemented schema lives in `internal/db/migrations/`. This document describes the current shape at a higher level.
 
 ## `schema_migrations`
 
@@ -91,3 +91,18 @@ Fields:
 - `access_type`
 - `token_id`
 - `created_at`
+
+## `auth_tokens`
+
+Persistent Bearer token metadata. Raw token values are never stored.
+
+Fields:
+
+- `id`
+- `token_hash`
+- `token_salt`
+- `scopes`
+- `created_at`
+- `last_used_at`
+- `revoked_at`
+- `expires_at`

@@ -137,6 +137,18 @@ type AccessLogEntry struct {
 	CreatedAt  time.Time
 }
 
+// AuthToken stores hash-only Bearer token metadata.
+type AuthToken struct {
+	ID         string
+	TokenHash  string
+	TokenSalt  string
+	Scopes     string
+	CreatedAt  time.Time
+	LastUsedAt *time.Time
+	RevokedAt  *time.Time
+	ExpiresAt  *time.Time
+}
+
 // MemoryUpdate contains partial changes to a memory item.
 type MemoryUpdate struct {
 	Title           *string
